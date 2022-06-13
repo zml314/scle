@@ -1,1 +1,514 @@
 
+library(Seurat)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(dplyr)
+library(ggsci)
+library(scater)
+library(SingleR)
+#memory.limit(102400)
+library(monocle)
+library(tibble)
+library(harmony)
+library(clusterProfiler)
+setwd('D:/SCLE/')
+setwd('./kera.new/')
+sam.name <- "multi"
+library(RColorBrewer)
+cols <- c(brewer.pal(12,"Paired"),brewer.pal(8,"Dark2"),brewer.pal(9,"Set1"),brewer.pal(8,"Set2"),
+          brewer.pal(12,"Set3"),brewer.pal(8,"Pastel2"),brewer.pal(9,"Pastel1"),brewer.pal(8,"Accent"))
+
+if(!dir.exists(sam.name)){
+              dir.create(sam.name)
+}
+merged=kera
+rm(kera)
+merged=subset(merged,seurat_clusters!=6)
+merged <- NormalizeData(merged, normalization.method = "LogNormalize",scale.factor = 10000)
+
+merged <- FindVariableFeatures(merged, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(merged)
+merged <- ScaleData(merged, features = all.genes)
+merged <- ScaleData(merged, vars.to.regress = "percent.mt")
+merged <- RunPCA(merged, features = VariableFeatures(object = merged))
+pdf(paste0("./",sam.name,"/PCA-ElbowPlot.pdf"),width = 6,height = 5)
+ElbowPlot(merged,ndims = 40)
+dev.off()
+dim.use=1:20
+library(harmony)
+merged=RunHarmony(merged,group.by.vars ='orig.ident')
+merged<- FindNeighbors(merged, dims = dim.use,reduction = 'harmony',nn.method = "rann")
+merged <- FindClusters(merged, resolution =0.1)
+merged <- RunTSNE(merged, dims = dim.use,reduction = 'harmony')
+VlnPlot(merged,c('CD3D','CD3E','COL1A1','COL3A1','FLG','LCE1C','KRT1','KRT14','LYZ','AIF1','CLDN5','CDH5','TPSAB1','TPSB2','PMEL','MLANA','MS4A1','CD79A','MPZ','CDH19'),stack = T,pt.size = 0,cols = )
+
+pdf(paste0("./",sam.name,"/tsne_Plot.harmony_res0.1_",max(dim.use),"PC.pdf"),width = 5,height = 4)
+DimPlot(object = merged, pt.size=0.1,label = T)
+dev.off()
+
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_kera.subcluster.marker_genes_tsne_res0.1_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig <- all.markers[all.markers$p_val_adj<=0.05,]
+
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_res0.1.kera.subcluster.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+VlnPlot(merged,c('COL17A1','KRT15','DST'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('KRT1','KRTDAP','SBSN'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('CCL20','IL36G'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('KRT79','FASN','THRSP','ELOVL5','FADS2','ACSBG1','APOC1'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('LCE1B','LCE2B'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('ATP1B1','ATP1A1','DEFB1','SAT1'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('ATP1B1','ATP1A1','DEFB1','SAT1','GJB6','GJB2','GJA1'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('KRT14','KRT5','CDH3','CDH1','KRT1','KRT10','DSG1','DSC1','KRT2','IVL','TGM3'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('TOP2A','UBE2C'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('KRT6B','KRT17'),cols = cols,stack = T,flip = T)
+merged$subtype=ifelse(merged$seurat_clusters%in%c(0,1,2,3),'Diff kera',
+                      ifelse(merged$seurat_clusters==5,'Basal kera',
+                             ifelse(merged$seurat_clusters%in%c(4,7),'Channel related kera',
+                                    ifelse(merged$seurat_clusters==6,'Cycling kera',
+                                           ifelse(merged$seurat_clusters==8,'IRS','Terminal diff kera')))))
+library(forcats)
+merged$subtype=fct_infreq(merged$subtype)
+table(merged$subtype)
+
+library(paletteer)
+pal.1 <- c(paletteer_d("ggsci::nrc_npg"),"#4DBBD5FF")
+p1=DimPlot(merged, label = F,cols = pal.1,pt.size = 0.1,group.by = 'subtype')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p2=DimPlot(merged,label = F,cols=pal.1,pt.size = 0.1,group.by = 'orig.ident')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p3=DimPlot(merged,label = F,cols=pal.1,pt.size = 0.1,group.by = 'sample')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p1
+pdf(paste0("./",sam.name,"/CellCluster.res0.1.kera.ctrl.scle.rename.sample.orig_",max(dim.use),"PC.pdf"),width = 24,height = 8)
+CombinePlots(plots = list(p2, p3,p1),ncol = 3)
+dev.off()
+VlnPlot(merged,c('CD3D','CD3E','KRT1','KRT14','COL1A1','COL3A1','ACTA2','LYZ','AIF1','ACKR1','SELE','LYVE1','PROX1','MS4A1','CD79A','IGHG1','IGHA1','TPSAB1','TPSB2','PMEL','MLANA','MPZ','CDH19'),stack = T,pt.size = 0,cols = cols,flip = T)+NoLegend()
+a=table(merged$sample,merged$subtype)
+a=as.data.frame(a)
+write.table(a,file = 'kera.res0.1.rename.sample.txt',row.names = T,sep = '\t')
+q1<-ggplot(data=a, mapping=aes(x = , y = AUC,fill=Methods))+
+              geom_bar(stat="identity",position=position_dodge(0.75))
+q1
+a=table(merged$orig.ident,merged$seurat_clusters)
+a=as.data.frame(a)
+table(merged$sample)
+a$ratio=ifelse(a$Var1=='HC',a$Freq/2821,a$Freq/7861)
+write.table(a,file = 'kera.sample.sbutype.ratio.txt',sep='/t')
+
+p1=ggplot(a,mapping = aes(Var2,ratio,fill=Var1))+geom_bar(stat='identity',position=position_dodge(0.75)) +
+              labs(x = '',y = 'Proportion of cells') 
+
+p2=p1+scale_fill_manual(values=cols)
+p3=p2 + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+                                                                                                          axis.text.x = element_text(angle = 45, hjust = 1))
+
+p3
+ggsave(filename='kera.subtype.sample.pdf',plot=p3,width=6,height=5)
+p1=ggplot(a,mapping = aes(Var2,Freq,fill=Var1))+geom_bar(stat='identity',position='fill') +
+              labs(x = 'sample',y = 'frenquency') +theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+                                                         axis.text.x = element_text(angle = 45, hjust = 1))
+p2=p1+scale_fill_manual(values=cols)
+
+p3=p2 + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p3
+ggsave(filename='T.subcluster.sample.res0.3.pdf',plot=p3,width=5,height=4)
+Idents(merged)=merged$subtype
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_kera.rename.marker_genes_tsne_res0.1_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig <- all.markers[all.markers$p_val_adj<=0.05,]
+
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_res0.1.kera.rename.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+DoHeatmap(merged,features = top10$gene,assay = 'RNA',label = F,raster = F)+scale_fill_gradientn(colors = c("navy","white","firebrick3"))
+merged$subtype.sample=c(paste(merged$subtype,merged$sample,sep = '.'))
+table(merged$subtype.sample)
+genelist <- read.table("./IFN.txt",header = T)
+genelist=genelist$genes
+genelist <- list(genelist)
+?AddModuleScore
+merged <- Seurat::AddModuleScore(object = merged,features = genelist,ctrl = 200,name = "IRGs")
+colnames(merged@meta.data)[22] <- "IRGs Score"
+VlnPlot(merged,features = "IRGs Score",split.by = "sample",pt.size = 0)
+data <- FetchData(merged,vars = c("subtype","sample","IRGs1"))
+colnames(data)[3]='IRGs'
+p <- ggplot(data = data,aes(subtype,IRGs1,fill = sample))
+p1=p + geom_boxplot() + RotatedAxis() + labs(title = "IRGs Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+
+p2
+ggsave(filename = 'IRGs score.fib.subtype.sample.xiangxiantu.pdf',plot = p2,width = 8,height = 5)
+colnames(merged@meta.data)
+colnames(pericyte@meta.data)[22] <- "IRGs Score"
+VlnPlot(pericyte,features = "IRGs Score",split.by = "sample",pt.size = 0)
+table(pericyte$subtype)
+data <- FetchData(pericyte,vars = c("subtype","sample","IRGs Score"))
+colnames(data)[3]='IRGs'
+p <- ggplot(data = data,aes(subtype,IRGs1,fill = sample))
+p1=p + geom_boxplot() + RotatedAxis() + labs(title = "IRGs Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p1
+p <- ggplot(data = data,aes(subtype,IRGs1,fill = sample))
+p1=p + geom_boxplot() + RotatedAxis() + labs(title = "IRGs Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+library(ggpubr)
+table(data$subtype)
+p3=p2+stat_compare_means(label = "p.format")###添加统计学分析P值
+?stat_compare_means
+p3=p2+stat_compare_means(
+              aes(label = paste0("p = ", ..p.format..))
+)
+p3
+ggsave(filename = 'IFNG score.fib.subtype.sample.xiangxiantu.pdf',plot = p2,width = 8,height = 5)
+boxp <- ggplot(data, aes(x=sample, y=IRGs)) + 
+              geom_boxplot(position=position_dodge()) + 
+              geom_point(aes(color=sample), position=position_jitterdodge()) + 
+              facet_wrap(~subtype) +
+              stat_compare_means()
+p1=boxp + geom_boxplot() + RotatedAxis() + labs(title = "IRGs Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+p2
+df <- ToothGrowth
+
+## construct plot
+boxp <- ggplot(df, aes(x=supp, y=len)) + 
+              geom_boxplot(position=position_dodge()) + 
+              geom_point(aes(color=supp), position=position_jitterdodge()) + 
+              facet_wrap(~dose) +
+              stat_compare_means()
+
+boxp
+## build plot
+boxp2 <- ggplot_build(boxp)
+
+## look at data and find the label
+boxp2$data
+
+## in this case, 'label'
+##  replace with adjusted p-value
+boxp2$data[[3]]$label <- p.adjust(boxp2$data[[3]]$p, method = "holm")
+
+## plot anew
+plot(ggplot_gtable(boxp2))
+b=read.gmt('c5.go.bp.v7.5.1.symbols.gmt')
+table(b$term)
+d=b$gene[b$term=='GOBP_LEUKOCYTE_CELL_CELL_ADHESION']
+d=list(d)
+b=read.table('./chemokines and receptors.txt',sep = '\t',header = T)
+b=c(b$Gene.Symbol,b$Receptor)
+b=unique(b)
+b
+b=as.list(b)
+merged
+VariableFeatures(merged)
+a=VariableFeatures(merged)
+d=b%in%a
+table(d)
+d=b[d]
+d=list(c(d))
+write.table(d,file = 'chemokines.kera.variablegenes.txt',sep = '\t')
+genes=c('CCL20','CXCL1')
+genes=as.list(genes)
+merged <- Seurat::AddModuleScore(object = merged,features = genes,ctrl = 200,name = "CCL20")
+?AddModuleScore
+colnames(merged@meta.data)[22] <- "IRGs Score"
+d
+merged@meta.data=merged@meta.data[1:23]
+Idents(merged)=merged$subtype
+VlnPlot(merged,features = c('CCL201','CCL202'),split.by = "sample",pt.size = 0)
+data <- FetchData(merged,vars = c("sample","CCL201"))
+colnames(data)[3]='CCL20'
+p <- ggplot(data = data,aes(sample,CCL201))
+p1=p + geom_boxplot() + RotatedAxis() + labs(title = "CCL20 score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+library(ggpubr)
+p2+stat_compare_means(label = "p.format")###添加统计学分析P值
+
+ggsave(filename = 'IFNG score.fib.subtype.sample.xiangxiantu.pdf',plot = p2,width = 8,height = 5)
+boxp <- ggplot(data, aes(x=sample, y=CCL201)) + 
+              geom_boxplot(position=position_dodge()) + 
+              geom_point(aes(color=sample), position=position_jitterdodge()) + 
+              facet_wrap(~subtype) +
+              stat_compare_means()
+p2=boxp+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank())
+boxp <- ggplot(data, aes(x=sample, y=CCL201,color=sample)) + 
+              geom_boxplot(position=position_dodge()) + 
+              geom_jitter(aes(fill=sample), width=0.18, shape=20, size=0.1) +
+              stat_compare_means()
+?geom_point()
+p2=boxp+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+              axis.text.x = element_text(angle = 45, hjust = 1))+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank())
+
+p2
+boxp2 <- ggplot_build(boxp)
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+p2
+ggplot(data, aes(x=sample, y=CCL201)) + 
+              geom_boxplot(width=0.6, lwd=0.6, fill="white", outlier.fill="white", outlier.color="white") + 
+              geom_jitter(aes(fill=sample), width=0.18, shape=21, size=0.03) +
+              labs(x='',y='CCL20 Score') +
+              theme(legend.position='none', axis.text=element_text(size=17), axis.title= element_text(size=17))
+Idents(merged)=merged$subtype.sample
+
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_kera.subtype.sample",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig <- all.markers[all.markers$p_val_adj<=0.05,]
+
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_kera.subtype.sample.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+library(clusterProfiler)
+library(topGO)
+library(Rgraphviz)
+library(pathview)
+library(org.Hs.eg.db)
+library(DOSE)
+library(clusterProfiler)
+library(enrichplot)
+#BiocManager::install('ReactomePA')
+library(ReactomePA)
+library(data.table)
+a=unique(merged$subtype.sample)
+
+for (i in a) {
+              gene=all.markers$cluster==i
+              gene=all.markers[gene,]
+              genename <- as.character(gene$gene)
+              genename=mapIds(x = org.Hs.eg.db,keys =genename,
+                              keytype = "SYMBOL",column = "ENTREZID")
+              enrich.go.BP=enrichGO(gene = genename,
+                                    OrgDb = org.Hs.eg.db,
+                                    keyType = 'ENTREZID',
+                                    ont = 'BP',
+                                    pvalueCutoff = 0.01,
+                                    qvalueCutoff = 0.05,readable = T)
+              enrich.KEGG=enrichKEGG(gene = genename,organism = "hsa",
+                                     keyType = "kegg",pvalueCutoff = 0.01,
+                                     use_internal_data = F,qvalueCutoff = 0.05)
+              
+              write.table(enrich.go.BP,file =paste0(i,'_.go.txt') ,sep='\t')
+              write.table(enrich.KEGG,file =paste0(i,'_.kegg.txt') ,sep='\t')
+}
+table(all.markers$cluster)
+Idents(merged)=merged$subtype
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_kera.sample",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig <- all.markers[all.markers$p_val_adj<=0.05,]
+
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_kera.sample.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+table(all.markers$cluster)
+VlnPlot(merged,features = c('KRT1','KRTDAP','GJB2','GJB6','COL17A1','POSTN','UBE2C','TOP2A','APOC1','ALB','LCE1B','LCE2B'),stack = T,flip = T,pt.size = 0,cols = cols)+NoLegend()
+Idents(merged)=merged$sample
+library(GSVA)
+library(GSEABase)
+library(clusterProfiler)
+library(GSEA)
+library(GSEABase)
+library(GSVA)
+library(data.table)
+SCLE=all.markers[all.markers$cluster=='SCLE',]
+HC=all.markers[all.markers$cluster=='HC',]
+genes <- data.frame(logFC=SCLE$avg_log2FC, 
+                    SYMBOL = SCLE$gene) 
+geneList<-genes$logFC
+names(geneList)=genes$SYMBOL 
+geneList=sort(geneList,decreasing = T)
+
+genes <- data.frame(logFC=HC$avg_log2FC, 
+                    SYMBOL = HC$gene)
+geneList<-genes$logFC 
+names(geneList)=genes$SYMBOL
+geneList=sort(geneList,decreasing = T)
+geneList
+kegggmt2 <- read.gmt("c5.go.bp.v7.5.1.symbols.gmt")
+?GSEA
+KEGG<-clusterProfiler::GSEA(geneList, TERM2GENE = kegggmt2) #GSEA分析
+kegg.1=as.data.frame(KEGG)
+fwrite(kegg.1,file = 'SCLE.kera.GSEA.C5bp.H.CSV')
+library(enrichplot)
+gseaplot2(KEGG,'GOBP_IMMUNE_RESPONSE',color="red",pvalue_table = T)
+gseaplot2(KEGG,'GOBP_DEFENSE_RESPONSE',color="red",pvalue_table = T)
+DoHeatmap(merged,features = top10$gene,assay = 'RNA',label = F,raster = F)+scale_fill_gradientn(colors = c("navy","white","firebrick3"))
+save(merged,file = 'kera.res0.1.renamed.Rata')
+GO=read.table('./expanded.kera.subtype.all.go.txt',sep = '\t',header = T,stringsAsFactors = F,quote = '')
+GO=GO[,c(3,8,10,11)]
+GO1=read.table('./expanded.kera.subtype.selected.go.txt',sep = '\t',header = T,stringsAsFactors = F)
+GO7=GO[GO$Description%in%GO1$Description,]
+#GO7$subcluster=paste0('SC',GO7$subcluster)
+library(forcats)
+library(ggplot2)
+GO7$Description=fct_infreq(GO7$Description)
+#GO7$sample=factor(GO7$sample,levels = c('HC','DLE','SLE'))
+p <- ggplot(GO7, aes(subtype,Description, size = Count, color=qvalue)) + geom_point() +xlab("sample")
+p2=p + scale_color_gradient(low='red',high='blue') +theme_bw()+theme(panel.grid.major=element_line(colour=NA))+theme(panel.grid.major=element_line(colour=NA))+theme(text = element_text(size = 20))
+p3=p2+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+p3
+ggsave(filename = 'burbble.pathway.subtype.kera.20220512.pdf',plot = p3,width =10,height = 10)
+rm(list = ls())
+cells=colnames(merged)
+cell_id <- sample(x = seq(1, length(cells)), 5000)
+cell=cells[cell_id]
+cell
+#merged.1=subset(merged,colnames(merged)%in%cell)
+a=colnames(merged)%in%cell
+merged$downsample=a
+table(merged$downsample)
+merged.1=subset(merged,downsample==T)
+save(merged.1,file = 'fib.downsample.nishixu.Rdata')
+table(merged$seurat_clusters)
+table(merged.1$subtype)
+
+table(Idents(merged))
+markers=all.markers
+markers=read.table('./multi/multi_marker_genes_tsne_res0.3.removed_30PC.txt',sep='\t')
+markers <- FindAllMarkers(merged.1, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+Idents(merged.1)=merged.1$sample
+markers.1=markers[markers$pct.1>0.5&markers$pct.2<0.5,]
+#top20 <- markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_logFC)
+rm(merged)
+save(merged,file="./multi/merged_f3.Robj") 
+
+data <- as(as.matrix(merged.1@assays$RNA@counts), 'sparseMatrix')
+pd <- new('AnnotatedDataFrame', data = merged.1@meta.data)
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+#markers=read.table('./multi/nishixu.ordering.genes.txt',sep = '\t',row.names = 1,header = T)
+#Construct monocle cds
+cds <- newCellDataSet(data,
+                      phenoData = pd,
+                      featureData = fd,
+                      lowerDetectionLimit = 0.5,
+                      expressionFamily = negbinomial.size());
+
+
+cds <- estimateSizeFactors(cds)
+rm(merged)
+cds <- estimateDispersions(cds)
+#expressed_genes <- row.names(subset(fData(cds)))
+save(cds,file="./multi/kera_cds_normal.Robj")
+
+#ordering_genes<-as.matrix(top20)
+
+#diff_test_res <- differentialGeneTest(cds[expressed_genes,],fullModelFormulaStr = "~percent.mt")
+
+ordering_genes <- row.names (subset(markers, p_val < 0.01))
+cds.1 <- setOrderingFilter(cds, all.markers$gene)
+
+pdf('./multi/plot_ordering_genes_subkera.pdf')
+plot_ordering_genes(cds.1)
+dev.off()
+HSMM <- reduceDimension(cds.1, max_components = 2,
+                        method = 'DDRTree')
+
+#Trajectory step 3: order cells along the trajectory  
+HSMM <- orderCells(HSMM)
+pdf('./multi/plot_cell_trajectory_sample.pdf')
+plot_cell_trajectory(HSMM, color_by = "sample",show_branch_points = F)
+dev.off()
+pdf('./multi/plot_cell_trajectory_kera.subtype.pdf')
+plot_cell_trajectory(HSMM, color_by = "subtype",show_branch_points = F,backbone_color = cols)
+dev.off()
+setwd('./fib.new/')
+pdf('./multi/plot_cell_trajectory_state_kera.pdf')
+plot_cell_trajectory(HSMM, color_by = "State",show_branch_points = F)
+dev.off()
+HSMM=orderCells(HSMM,root_state = 3)
+pdf('./multi/plot_cell_trajectory_pseudotime_kera.pdf')
+plot_cell_trajectory(HSMM, color_by = "Pseudotime",show_branch_points = F)
+dev.off()
+library(ggsci)
+p1=plot_cell_trajectory(HSMM, color_by = "sample",show_branch_points = F)  + scale_color_npg() 
+p2=plot_cell_trajectory(HSMM, color_by = "State",show_branch_points = F)  + scale_color_nejm()
+colour=c("#DC143C","#0000FF","#20B2AA","#FFA500","#9370DB","#98FB98","#F08080")
+p3=plot_cell_trajectory(HSMM, color_by = "subtype",show_branch_points = F)  + scale_color_manual(values = colour)
+p1|p2|p3
+p1=plot_cell_trajectory(HSMM, color_by = "sample",show_branch_points = F)  + scale_color_npg() 
+p2=plot_cell_trajectory(HSMM, color_by = "Pseudotime",show_branch_points = F)  
+colour=c("#DC143C","#0000FF","#20B2AA","#FFA500","#9370DB","#98FB98","#F08080")
+p3=plot_cell_trajectory(HSMM, color_by = "subtype",show_branch_points = F)  + scale_color_manual(values = colour)
+p1|p2|p3
+plotc <- p1|p2|p3
+plotc
+ggsave("trajetory.kera.sample.psedotime.subtype.pdf.pdf", plot = plotc, width = 15, height = 5)
+keygenes <- 'IFI27'
+HSMM_subset <- HSMM[keygenes,]
+##可视化：以state/celltype/pseudotime进行
+p1 <- plot_genes_in_pseudotime(HSMM_subset, color_by = "sample")+scale_color_npg()
+p2 <- plot_genes_in_pseudotime(HSMM_subset, color_by = "State")
+p3 <- plot_genes_in_pseudotime(HSMM_subset, color_by = "subtype") + scale_color_manual(values = colour)
+p4 <- plot_genes_in_pseudotime(HSMM_subset, color_by = "Pseudotime")
+plotc <- p1|p3|p4
+plotc
+ggsave("trajetory.kera.IFI27.expression.pdf.pdf", plot = plotc, width = 15, height = 5)
+Time_diff <- differentialGeneTest(HSMM[ordering_genes,], cores = 1, 
+                                  fullModelFormulaStr = "~sm.ns(Pseudotime)")
+class(Time_diff$qval)
+scle=SCLE$gene[1:30]
+hc=HC$gene[1:30]
+genes=c(scle,hc)
+genes
+Time_genes <- top_n(Time_diff, n = 50, desc(qval)) %>% pull(gene_short_name) %>% as.character()
+p = plot_pseudotime_heatmap(HSMM[genes,], num_clusters=4, show_rownames=T, return_heatmap=T)
+ggsave("trajetory.kera.genes.pheatmap.pdf", p, width = 8, height = 10)
+####找差异基因####
+HSMM=detectGenes(HSMM,min_expr = 0.1)
+expressed_genes=row.names(subset(fData(HSMM),num_cells_expressed>=10)) #在部分基因里面找
+pseudotime_de <- differentialGeneTest(HSMM[expressed_genes,],
+                                      fullModelFormulaStr = "~sm.ns(Pseudotime)")
+pseudotime_de <- pseudotime_de[order(pseudotime_de$qval), ]
+states_de <- differentialGeneTest(HSMM[expressed_genes,],
+                                  fullModelFormulaStr = "~State")
+states_de <- states_de[order(states_de$qval), ]
+table(states_de$use_for_ordering)
+saveRDS(HSMM, file = "kera_monocle2.rds")
+write.table(pseudotime_de, file = "t.dermis.pseudotime_de.rds", quote = FALSE, sep = '\t', row.names = FALSE, col.names = TRUE)
+write.table(states_de, file = "t.dermis.states_de.rds", quote = FALSE, sep = '\t', row.names = FALSE, col.names = TRUE)
+
+pdf("genes_branched_pseudotime.pdf",width = 9,height = 4)
+plot_genes_branched_pseudotime(HSMM,
+                               branch_point = 1,
+                               color_by = "sample",
+                               cell_size=2,
+                               ncol = 2)
+dev.off()
+BEAM_res=BEAM(HSMM,branch_point = 1,cores = 1)
+BEAM_res=BEAM_res[,c("gene_short_name","pval","qval")]
+
+tmp1=plot_genes_branched_heatmap(HSMM[row.names(subset(BEAM_res,qval<1e-4)),],
+                                 branch_point = 1,
+                                 num_clusters = 4, 
+                                 cores = 1,
+                                 branch_labels = c('Cell_fate1','Cell_fate2'),
+                                 #hmcols = NULL, 
+                                 hmcols = colorRampPalette(rev(brewer.pal(9, "PRGn")))(62),
+                                 branch_colors = c("#979797", "#F05662", "#7990C8"), 
+                                 use_gene_short_name = T,
+                                 show_rownames = F,
+                                 return_heatmap = T 
+)
+pdf("branched_heatmap.pdf",width = 5,height = 6)
+tmp1$ph_res
+dev.off()
+pdf('./multi/plot_cell_trajectory_pseudotime_heatmap_fib.pdf',width = 10,height = 15)
+plot_pseudotime_heatmap(HSMM[row.names(HSMM)%in%d],show_rownames = T,num_clusters = 3)
+dev.off()
+ordering_genes
+a=markers$gene[markers$cluster=='SCLE']
+b=markers$gene[markers$cluster=='HC']
+d=c(a[1:50],b[1:50])
+d
+d=d[-c(55,57,58,59,60,68,69,75,78,90,99)]
+d=data.frame(hc.genes=b,scle.genes=a,heatmap.genes=d)
+d=cbind(d,a,b)
+write.table(ordering_genes,file = 'trajetory.genes.txt',row.names = F)
+write.table(ordering_genes[1:50],file = 'trajetory.genes.pheatmap.txt',row.names = F)
