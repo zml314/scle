@@ -1,1 +1,466 @@
+####scle.fib####
+library(Seurat)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(dplyr)
+library(ggsci)
+library(scater)
+library(SingleR)
+#memory.limit(102400)
+library(monocle)
+library(tibble)
+library(harmony)
+library(clusterProfiler)
+setwd('D:/SCLE/')
+dir.create('./fib.new')
+setwd('./fib.new/')
+sam.name <- "multi"
+library(RColorBrewer)
+cols <- c(brewer.pal(12,"Paired"),brewer.pal(8,"Dark2"),brewer.pal(9,"Set1"),brewer.pal(8,"Set2"),
+          brewer.pal(12,"Set3"),brewer.pal(8,"Pastel2"),brewer.pal(9,"Pastel1"),brewer.pal(8,"Accent"))
 
+if(!dir.exists(sam.name)){
+              dir.create(sam.name)
+}
+merged=fib
+rm(fib)
+merged=subset(merged,seurat_clusters!=6)
+merged <- NormalizeData(merged, normalization.method = "LogNormalize",scale.factor = 10000)
+merged <- FindVariableFeatures(merged, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(merged)
+merged <- ScaleData(merged, features = all.genes)
+merged <- ScaleData(merged, vars.to.regress = "percent.mt")
+merged <- RunPCA(merged, features = VariableFeatures(object = merged))
+pdf(paste0("./",sam.name,"/PCA-ElbowPlot.pdf"),width = 6,height = 5)
+ElbowPlot(merged,ndims = 40)
+dev.off()
+dim.use=1:20
+library(harmony)
+merged=RunHarmony(merged,group.by.vars ='orig.ident')
+merged<- FindNeighbors(merged, dims = dim.use,reduction = 'harmony',nn.method = "rann")
+merged <- FindClusters(merged, resolution =0.1)
+merged <- RunTSNE(merged, dims = dim.use,reduction = 'harmony')
+pdf(paste0("./",sam.name,"/tsne_Plot.harmony_res0.1_",max(dim.use),"PC.pdf"),width = 5,height = 4)
+DimPlot(object = merged, pt.size=0.1,label = T)
+dev.off()
+Idents(merged)=merged$RNA_snn_res.0.3
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_res0.1_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig <- all.markers[all.markers$p_val_adj<=0.05,]
+
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_res0.1.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+VlnPlot(merged,c('APCDD1','COL18A1','COL13A1','COL23A1'),cols = cols,stack = T)
+VlnPlot(merged,c('WISP2','ANGPTL1','MFAP5'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('COL11A1','POSTN','ASPN','COMP'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('APOE','CCL19','CXCL13','CCL20','ACTA2','TPM2','RGS5'),cols = cols,stack = T,flip = T)
+
+library(paletteer)
+pal.1 <- c(paletteer_d("ggsci::nrc_npg"),"#4DBBD5FF")
+p1=DimPlot(merged, label = F,cols = pal.1,pt.size = 0.1,group.by = 'subtype')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p2=DimPlot(merged,label = F,cols=pal.1,pt.size = 0.1,group.by = 'orig.ident')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p3=DimPlot(merged,label = F,cols=pal.1,pt.size = 0.1,group.by = 'sample')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p1
+pdf(paste0("./",sam.name,"/CellCluster.res0.2.ctrl.scle.rename.sample.orig_",max(dim.use),"PC.pdf"),width = 24,height = 8)
+CombinePlots(plots = list(p2, p3,p1),ncol = 3)
+dev.off()
+VlnPlot(merged,c('CD3D','CD3E','KRT1','KRT14','COL1A1','COL3A1','ACTA2','LYZ','AIF1','ACKR1','SELE','LYVE1','PROX1','MS4A1','CD79A','IGHG1','IGHA1','TPSAB1','TPSB2','PMEL','MLANA','MPZ','CDH19'),stack = T,pt.size = 0,cols = cols,flip = T)+NoLegend()
+genelist <- read.table("./IFN.txt",header = T)
+genelist=genelist$genes
+genelist <- list(genelist)
+
+load('./pericyte.res0.3.rename.Rdata')
+pericyte <- Seurat::AddModuleScore(object = pericyte,features = genelist,ctrl = 100,name = "IRGs")
+merged <- Seurat::AddModuleScore(object = merged,features = genelist,ctrl = 200,name = "IRGs")
+colnames(merged@meta.data)[22] <- "IRGs Score"
+VlnPlot(merged,features = "IRGs Score",split.by = "sample",pt.size = 0)
+data <- FetchData(merged,vars = c("subtype","sample","IRGs Score"))
+colnames(data)[3]='IRGs'
+p <- ggplot(data = data,aes(subtype,IRGs,fill = sample))
+p1=p + geom_boxplot() + RotatedAxis() + labs(title = "IRGs Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+             axis.text.x = element_text(angle = 45, hjust = 1))
+
+p2
+ggsave(filename = 'IRGs score.fib.subtype.sample.xiangxiantu.pdf',plot = p2,width = 8,height = 5)
+colnames(merged@meta.data)
+colnames(pericyte@meta.data)[22] <- "IRGs Score"
+VlnPlot(pericyte,features = "IRGs Score",split.by = "sample",pt.size = 0)
+table(pericyte$subtype)
+data <- FetchData(pericyte,vars = c("subtype","sample","IRGs Score"))
+colnames(data)[3]='IRGs'
+p <- ggplot(data = data,aes(subtype,IRGs,fill = sample))
+p1=p + geom_boxplot() + RotatedAxis() + labs(title = "IRGs Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p1
+cran.packages <- c("msigdbr", "dplyr", "purrr", "stringr","magrittr",
+                   "RobustRankAggreg", "tibble", "reshape2", "ggsci",
+                   "tidyr", "aplot", "ggfun", "ggplotify", "ggridges",
+                   "gghalves", "Seurat", "SeuratObject", "methods",
+                   "devtools", "BiocManager","data.table","doParallel",
+                   "doRNG")
+if (!requireNamespace(cran.packages, quietly = TRUE)) {
+              install.packages(cran.packages, ask = F, update = F)
+}
+bioconductor.packages <- c("GSEABase", "AUCell", "SummarizedExperiment",
+                           "singscore", "GSVA", "ComplexHeatmap", "ggtree",
+                           "Nebulosa")
+if (!requireNamespace(bioconductor.packages, quietly = TRUE)) {
+              BiocManager::install(bioconductor.packages, ask = F, update = F)
+}
+if (!requireNamespace("UCell", quietly = TRUE)) {
+              devtools::install_github("carmonalab/UCell")
+}
+if (!requireNamespace("irGSEA", quietly = TRUE)) {
+              devtools::install_github("chuiqin/irGSEA")
+}
+save(pericyte,file='./pericyte.res0.3.rename.Rdata')
+library(GSVA)
+install.packages('UCell')
+BiocManager::install('UCell')
+library(UCell)
+library(irGSEA)
+ret=subset(merged,subtype=='secretory reticular fib')
+ret <- NormalizeData(ret, normalization.method = "LogNormalize",scale.factor = 10000)
+ret <- FindVariableFeatures(ret, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(ret)
+ret <- ScaleData(ret, features = all.genes)
+ret <- ScaleData(ret, vars.to.regress = "percent.mt")
+ret <- RunPCA(ret, features = VariableFeatures(object = merged))
+ret$subtype.sample=c(paste(ret$subtype,ret$sample,sep = '.'))
+table(ret$subtype.sample)
+Idents(ret)=ret$subtype.sample
+table(Idents(ret))
+dim.use=1:20
+all.markers <- FindAllMarkers(ret, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_reticular.sample",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig <- all.markers[all.markers$p_val_adj<=0.05,]
+
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_reticular.sample.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+top10$gene
+VlnPlot(ret,features = top10$gene[1:10],pt.size = 0,group.by = 'sample',ncol = 10,cols = cols)
+library(clusterProfiler)
+library(topGO)
+library(Rgraphviz)
+library(pathview)
+library(org.Hs.eg.db)
+library(DOSE)
+library(clusterProfiler)
+library(enrichplot)
+#BiocManager::install('ReactomePA')
+library(ReactomePA)
+library(data.table)
+a=c('secretory reticular fib.SCLE','secretory reticular fib.HC')
+for (i in a) {
+              gene=all.markers$cluster==i
+              gene=all.markers[gene,]
+              genename <- as.character(gene$gene)
+              genename=mapIds(x = org.Hs.eg.db,keys =genename,
+                              keytype = "SYMBOL",column = "ENTREZID")
+              enrich.go.BP=enrichGO(gene = genename,
+                                    OrgDb = org.Hs.eg.db,
+                                    keyType = 'ENTREZID',
+                                    ont = 'BP',
+                                    pvalueCutoff = 0.01,
+                                    qvalueCutoff = 0.05,readable = T)
+              enrich.KEGG=enrichKEGG(gene = genename,organism = "hsa",
+                                     keyType = "kegg",pvalueCutoff = 0.01,
+                                     use_internal_data = F,qvalueCutoff = 0.05)
+              
+              write.table(enrich.go.BP,file =paste0(i,'_.go.txt') ,sep='\t')
+              write.table(enrich.KEGG,file =paste0(i,'_.kegg.txt') ,sep='\t')
+}
+
+for (i in a) {
+              gene=all.markers$cluster==i
+              gene=all.markers[gene,]
+              genename <- as.character(gene$gene)
+              genename=mapIds(x = org.Hs.eg.db,keys =genename,
+                              keytype = "SYMBOL",column = "ENTREZID")
+              enrich.go.BP=enrichGO(gene = genename,
+                                    OrgDb = org.Hs.eg.db,
+                                    keyType = 'ENTREZID',
+                                    ont = 'BP',
+                                    pvalueCutoff = 0.01,
+                                    qvalueCutoff = 0.05,readable = T)
+              enrich.KEGG=enrichKEGG(gene = genename,organism = "hsa",
+                                     keyType = "kegg",pvalueCutoff = 0.01,
+                                     use_internal_data = F,qvalueCutoff = 0.05)
+              
+              write.table(enrich.go.BP,file =paste0(i,'_.go.txt') ,sep='\t')
+              write.table(enrich.KEGG,file =paste0(i,'_.kegg.txt') ,sep='\t')
+}
+
+merged$subtype.sample=c(paste(merged$subtype,merged$sample,sep = '.'))
+table(merged$subtype.sample)
+Idents(merged)=merged$subtype.sample
+setwd('../')
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_fib.subtype.sample",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig <- all.markers[all.markers$p_val_adj<=0.05,]
+
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_fib.subtype.sample.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+
+a=unique(merged$subtype.sample)
+
+for (i in a) {
+              gene=all.markers$cluster==i
+              gene=all.markers[gene,]
+              genename <- as.character(gene$gene)
+              genename=mapIds(x = org.Hs.eg.db,keys =genename,
+                              keytype = "SYMBOL",column = "ENTREZID")
+              enrich.go.BP=enrichGO(gene = genename,
+                                    OrgDb = org.Hs.eg.db,
+                                    keyType = 'ENTREZID',
+                                    ont = 'BP',
+                                    pvalueCutoff = 0.01,
+                                    qvalueCutoff = 0.05,readable = T)
+              enrich.KEGG=enrichKEGG(gene = genename,organism = "hsa",
+                                     keyType = "kegg",pvalueCutoff = 0.01,
+                                     use_internal_data = F,qvalueCutoff = 0.05)
+              
+              write.table(enrich.go.BP,file =paste0(i,'_.go.txt') ,sep='\t')
+              write.table(enrich.KEGG,file =paste0(i,'_.kegg.txt') ,sep='\t')
+}
+b=read.gmt('c5.go.bp.v7.5.1.symbols.gmt')
+table(b$term)
+d=b$gene[b$term=='GOBP_LEUKOCYTE_CELL_CELL_ADHESION']
+d=list(d)
+merged <- Seurat::AddModuleScore(object = merged,features = d,ctrl = 200,name = "ADHESION")
+colnames(merged@meta.data)[22] <- "IRGs Score"
+merged@meta.data=merged@meta.data[1:23]
+Idents(merged)=merged$subtype
+VlnPlot(merged,features = "ADHESION1",split.by = "sample",pt.size = 0)
+data <- FetchData(merged,vars = c("subtype","sample","HYPOXIA1"))
+colnames(data)[3]='IRGs'
+p <- ggplot(data = data,aes(subtype,HYPOXIA1,fill = sample))
+p1=p + geom_boxplot() + RotatedAxis() + labs(title = "Regulation of cellular response to hypoxia score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+library(ggpubr)
+p2+stat_compare_means(label = "p.format")
+
+ggsave(filename = 'IFNG score.fib.subtype.sample.xiangxiantu.pdf',plot = p2,width = 8,height = 5)
+colnames(merged@meta.data)
+colnames(pericyte@meta.data)[22] <- "IRGs Score"
+VlnPlot(pericyte,features = "IRGs Score",split.by = "sample",pt.size = 0)
+Idents(merged)=merged$subtype
+DotPlot(merged,features = genes)
+genes=unique(top10$gene)
+DoHeatmap(merged,features = top10$gene,assay = 'RNA',label = F)+scale_fill_gradientn(colors = c("navy","white","firebrick3"))
+GO=read.table('./increased.fib.subtype.all.go.txt',sep = '\t',header = T,stringsAsFactors = F,quote = '')
+GO=GO[,c(3,8,10,11)]
+GO1=read.table('./increased.fib.subtype.selected.go.txt',sep = '\t',header = T,stringsAsFactors = F)
+GO7=GO[GO$Description%in%GO1$Description,]
+#GO7$subcluster=paste0('SC',GO7$subcluster)
+library(forcats)
+library(ggplot2)
+GO7$Description=fct_infreq(GO7$Description)
+#GO7$sample=factor(GO7$sample,levels = c('HC','DLE','SLE'))
+p <- ggplot(GO7, aes(subtype,Description, size = Count, color=qvalue)) + geom_point() +xlab("sample")
+p2=p + scale_color_gradient(low='red',high='blue') +theme_bw()+theme(panel.grid.major=element_line(colour=NA))+theme(panel.grid.major=element_line(colour=NA))+theme(text = element_text(size = 20))
+p3=p2+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+               axis.text.x = element_text(angle = 45, hjust = 1))
+p3
+ggsave(filename = 'burbble.pathway.subtype.fib.20220509.pdf',plot = p3,width =10,height = 8)
+Idents(merged)=merged$sample
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_fib.sample",max(dim.use),"PC.txt"),sep="\t",quote = F)
+all.markers=read.table('./multi/multi_marker_genes_tsne_fib.sample20PC.txt',sep = '\t',header = T,row.names = 1)
+marker.sig <- all.markers[all.markers$p_val_adj<=0.05,]
+
+top30 <- marker.sig %>% group_by(cluster) %>% top_n(n = 30, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_fib.sample.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig$Group=ifelse(marker.sig$avg_log2FC>1&marker.sig$cluster=='SCLE','up in SCLE',
+                         ifelse(marker.sig$avg_log2FC>1&marker.sig$cluster=='HC','up in HC','stable'))
+table(marker.sig$Group)
+
+table(all.markers$avg_log2FC>2)
+genes=all.markers$gene[all.markers$avg_log2FC>3]
+genes=genes[-c(18,19,20,21,8,12)]
+genes
+marker.sig$label=ifelse(marker.sig$gene%in%genes,marker.sig$gene,'')
+marker.sig$avg_log2FC.1=ifelse(marker.sig$cluster=='HC',-marker.sig$avg_log2FC,marker.sig$avg_log2FC)
+
+g=ggplot(marker.sig,
+         aes(x=avg_log2FC.1,y=-log10(p_val_adj)/100,  
+             color=Group,laber=label)) +
+              scale_color_manual(values=c("grey", "blue","red"))+
+              geom_point(alpha=0.4,size=1.75) +    
+              theme_set(theme_set(theme_bw(base_size=20))) +
+              xlab("log2 fold change")+ylab("-log pvalue") +   
+              theme(plot.title=element_text(size=15,hjust=0.5))+
+              geom_hline(yintercept = 0,linetype=4)+
+              geom_vline(xintercept=c(-1,1),linetype=4)+
+              theme_bw()+theme(panel.grid=element_blank())
+g
+g1=g+xlim(c(-5,5))+ylim(0,3)
+g1
+g2=g1+ geom_point(size = 3, shape = 1, data = data) +
+              ggrepel::geom_label_repel(marker.sig,
+                                        aes(label = label),
+                                        color="black")
+g2
+ggsave(g,filename='volcano.png')
+top10$gene
+top30$gene
+DoHeatmap(merged,features = top30$gene)+scale_fill_gradientn(colors = c("navy","white","firebrick3"))
+scle=all.markers$gene[all.markers$cluster=='SCLE']
+hc=all.markers$gene[all.markers$cluster=='HC']
+library(GSVA)
+library(GSEABase)
+library(clusterProfiler)
+library(GSEA)
+library(GSEABase)
+library(GSVA)
+library(data.table)
+SCLE=all.markers[all.markers$cluster=='SCLE',]
+HC=all.markers[all.markers$cluster=='HC',]
+genes <- data.frame(logFC=SCLE$avg_log2FC,
+                      SYMBOL = SCLE$gene)
+geneList<-genes$logFC
+names(geneList)=genes$SYMBOL 
+geneList=sort(geneList,decreasing = T)
+geneList
+kegggmt2 <- read.gmt("c5.go.bp.v7.5.1.symbols.gmt")
+?GSEA
+KEGG<-clusterProfiler::GSEA(geneList, TERM2GENE = kegggmt2)
+kegg.1=as.data.frame(KEGG)
+fwrite(kegg.1,file = 'SCLE.GSEA.C5bp.H.CSV')
+library(enrichplot)
+gseaplot2(KEGG,'GOBP_IMMUNE_RESPONSE',color="red",pvalue_table = T)
+rm(list = ls())
+cells=colnames(merged)
+cell_id <- sample(x = seq(1, length(cells)), 5000)
+cell=cells[cell_id]
+cell
+#merged.1=subset(merged,colnames(merged)%in%cell)
+a=colnames(merged)%in%cell
+merged$downsample=a
+table(merged$downsample)
+merged.1=subset(merged,downsample==T)
+save(merged.1,file = 'fib.downsample.nishixu.Rdata')
+table(merged$seurat_clusters)
+table(merged.1$subtype)
+cell_ids <- row.names(cells)
+cell_source <- factor(cells$donor_organism.human_specific.ethnicity.ontology_label)
+cell_ids_list <- lapply(split(cell_ids, cell_source), function(x){ sample(x, 3000) })
+cell_id <- unlist(cell_ids_list)
+cell_sml <- cells[cell_id, ]
+mtx_sml <- mtx[, cell_id]
+
+table(Idents(merged))
+markers=all.markers
+markers=read.table('./multi/multi_marker_genes_tsne_res0.3.removed_30PC.txt',sep='\t')
+markers <- FindAllMarkers(merged.1, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+Idents(merged.1)=merged.1$sample
+markers.1=markers[markers$pct.1>0.5&markers$pct.2<0.5,]
+#top20 <- markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_logFC)
+rm(merged)
+save(merged,file="./multi/merged_f3.Robj") 
+
+data <- as(as.matrix(merged.1@assays$RNA@counts), 'sparseMatrix')
+pd <- new('AnnotatedDataFrame', data = merged.1@meta.data)
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+markers=read.table('./multi/nishixu.ordering.genes.txt',sep = '\t',row.names = 1,header = T)
+#Construct monocle cds
+cds <- newCellDataSet(data,
+                      phenoData = pd,
+                      featureData = fd,
+                      lowerDetectionLimit = 0.5,
+                      expressionFamily = negbinomial.size());
+
+
+cds <- estimateSizeFactors(cds)
+rm(merged)
+cds <- estimateDispersions(cds)
+#expressed_genes <- row.names(subset(fData(cds)))
+save(cds,file="./multi/fib_cds_normal.Robj")
+
+#ordering_genes<-as.matrix(top20)
+
+#diff_test_res <- differentialGeneTest(cds[expressed_genes,],fullModelFormulaStr = "~percent.mt")
+
+ordering_genes <- row.names (subset(markers, p_val < 0.01))
+cds.1 <- setOrderingFilter(cds, all.markers$gene)
+
+pdf('./multi/plot_ordering_genes_subt.pdf')
+plot_ordering_genes(cds.1)
+dev.off()
+
+#Trajectory step 2: reduce data dimensionality  
+HSMM <- reduceDimension(cds.1, max_components = 2,
+                        method = 'DDRTree')
+
+#Trajectory step 3: order cells along the trajectory  
+HSMM <- orderCells(HSMM)
+pdf('./multi/plot_cell_trajectory_seurat_clusters_subtype.pdf')
+plot_cell_trajectory(HSMM, color_by = "subtype",show_branch_points = F)
+dev.off()
+setwd('./fib.new/')
+pdf('./multi/plot_cell_trajectory_state_subfib3.pdf')
+plot_cell_trajectory(HSMM, color_by = "State",show_branch_points = F)
+dev.off()
+HSMM=orderCells(HSMM,root_state = 3)
+pdf('./multi/plot_cell_trajectory_pseudotime_subt3.pdf')
+plot_cell_trajectory(HSMM, color_by = "Pseudotime",show_branch_points = F)
+dev.off()
+HSMM=detectGenes(HSMM,min_expr = 0.1)
+expressed_genes=row.names(subset(fData(HSMM),num_cells_expressed>=10)) 
+pseudotime_de <- differentialGeneTest(HSMM[expressed_genes,],
+                                      fullModelFormulaStr = "~sm.ns(Pseudotime)")
+pseudotime_de <- pseudotime_de[order(pseudotime_de$qval), ]
+states_de <- differentialGeneTest(HSMM[expressed_genes,],
+                                  fullModelFormulaStr = "~State")
+states_de <- states_de[order(states_de$qval), ]
+table(states_de$use_for_ordering)
+saveRDS(HSMM, file = "fib_monocle.rds")
+write.table(pseudotime_de, file = "t.dermis.pseudotime_de.rds", quote = FALSE, sep = '\t', row.names = FALSE, col.names = TRUE)
+write.table(states_de, file = "t.dermis.states_de.rds", quote = FALSE, sep = '\t', row.names = FALSE, col.names = TRUE)
+
+pdf("genes_branched_pseudotime.pdf",width = 9,height = 4)
+plot_genes_branched_pseudotime(HSMM,
+                               branch_point = 1,
+                               color_by = "sample",
+                               cell_size=2,
+                               ncol = 2)
+dev.off()
+BEAM_res=BEAM(HSMM,branch_point = 1,cores = 1)
+BEAM_res=BEAM_res[,c("gene_short_name","pval","qval")]
+
+tmp1=plot_genes_branched_heatmap(HSMM[row.names(subset(BEAM_res,qval<1e-4)),],
+                                 branch_point = 1,
+                                 num_clusters = 4, 
+                                 cores = 1,
+                                 branch_labels = c('Cell_fate1','Cell_fate2'),
+                                 #hmcols = NULL, 
+                                 hmcols = colorRampPalette(rev(brewer.pal(9, "PRGn")))(62),
+                                 branch_colors = c("#979797", "#F05662", "#7990C8"),
+                                 use_gene_short_name = T,
+                                 show_rownames = F,
+                                 return_heatmap = T 
+)
+pdf("branched_heatmap.pdf",width = 5,height = 6)
+tmp1$ph_res
+dev.off()
+pdf('./multi/plot_cell_trajectory_pseudotime_heatmap_fib.pdf',width = 10,height = 15)
+plot_pseudotime_heatmap(HSMM[row.names(HSMM)%in%d],show_rownames = T,num_clusters = 3)
+dev.off()
+ordering_genes
+a=markers$gene[markers$cluster=='SCLE']
+b=markers$gene[markers$cluster=='HC']
+d=c(a[1:50],b[1:50])
+d
+d=d[-c(55,57,58,59,60,68,69,75,78,90,99)]
+d=data.frame(hc.genes=b,scle.genes=a,heatmap.genes=d)
+d=cbind(d,a,b)
+write.table(x = d,file = 'nishixu.genes.pheatmap.txt',row.names = F)
+write.table(x = a,file = 'nishixu.scle.genes.pheatmap.txt',row.names = F)
+write.table(x = b,file = 'nishixu.hc.genes.pheatmap.txt',row.names = F)
