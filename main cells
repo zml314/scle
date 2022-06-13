@@ -1,1 +1,244 @@
+setwd('/home/zhengmeiling/R_analasis/SCLE/')
+library(Seurat)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(dplyr)
+library(ggsci)
+library(scater)
+library(SingleR)
+library(monocle)
+library(tibble)
+library(harmony)
+library(clusterProfiler)
+library(sctransform)
+rm(list = ls())
+load('./ctrl.scle.res0.2.rename.Rdata')
+sam.name <- "multi"
+if(!dir.exists(sam.name)){
+  dir.create(sam.name)
+}
+library(DoubletFinder)
 
+sweep.res.list <- paramSweep_v3(merged, PCs = 1:30, sct = F)
+
+sweep.stats <- summarizeSweep(sweep.res.list, GT = FALSE)  
+bcmvn <- find.pK(sweep.stats) 
+pK_bcmvn <- bcmvn$pK[which.max(bcmvn$BCmetric)] %>% as.character() %>% as.numeric() 
+DoubletRate = 0.02  
+homotypic.prop <- modelHomotypic(merged$cell_type)
+nExp_poi <- round(DoubletRate*ncol(merged)) 
+nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+merged <- doubletFinder_v3(merged, PCs = 1:30, pN = 0.25, pK = pK_bcmvn, 
+                          nExp = nExp_poi.adj, reuse.pANN = F, sct = F)
+colnames(merged@meta.data)
+DimPlot(merged, reduction = "tsne", group.by = "DF.classifications_0.25_0.3_691")
+head(merged@meta.data)
+table(merged$DF.classifications_0.25_0.3_691)
+merged=subset(merged,DF.classifications_0.25_0.3_691!='Doublet')
+dim(merged)
+library(RColorBrewer)
+cols <- c(brewer.pal(12,"Paired"),brewer.pal(8,"Dark2"),brewer.pal(9,"Set1"),brewer.pal(8,"Set2"),
+          brewer.pal(12,"Set3"),brewer.pal(8,"Pastel2"),brewer.pal(9,"Pastel1"),brewer.pal(8,"Accent"))
+table(merged$seurat_clusters)
+table(merged$cell_type)
+table(merged$RNA_snn_res.0.2)
+merged=subset(merged,seurat_clusters!='9')
+merged <- NormalizeData(merged, normalization.method = "LogNormalize",scale.factor = 10000)
+merged <- FindVariableFeatures(merged, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(merged)
+merged <- ScaleData(merged, features = rownames(merged))
+merged <- ScaleData(merged, vars.to.regress = "percent.mt")
+?RunPCA
+merged <- RunPCA(merged, features = VariableFeatures(object = merged),ndims.print = 1:30)
+pdf(paste0("./",sam.name,"/PCA-DimHeatmap.ctrl.scle.pdf"),width = 20,height = 20)
+DimHeatmap(merged, dims = 1:20, cells = 500, balanced = TRUE)
+dev.off()
+pdf(paste0("./",sam.name,"/PCA-ElbowPlot.ctrl.scle.pdf"),width = 6,height = 5)
+ElbowPlot(merged,ndims = 50)
+dev.off()
+dim.use <- 1:30
+library(harmony)
+merged=RunHarmony(merged,group.by.vars ='orig.ident' )
+merged <- FindNeighbors(merged, dims = dim.use,reduction = 'harmony')
+merged <- FindClusters(merged, resolution = 0.2)
+library(ggplot2)
+library(clustree)
+clustree(merged@meta.data, prefix = "RNA_snn_res.")
+merged <- RunTSNE(merged, dims = dim.use,check_duplicates = FALSE,reduction = 'harmony')
+#install.packages('paletteer')
+library(paletteer)
+cols=scale_fill_nejm()
+pal <- paletteer_d("ggsci::nrc_npg")[c(1,2,3,4,9,5,2,6,8,10)]
+pal.1 <- paletteer_d("ggsci::nrc_npg")
+Idents(merged1)=merged1$RNA_snn_res.0.2
+table(merged$RNA_snn_res.0.2)
+table(Idents(merged))
+DimPlot(merged,reduction = 'tsne',label = F)
+Idents(merged)=merged$seurat_clusters
+pdf(paste0("./",sam.name,"/CellCluster-TSNEPlot_res0.2_",max(dim.use),"PC.pdf"),width = 6,height = 5)
+DimPlot(object = merged,reduction = 'tsne',pt.size=0.05,label = T,cols = cols)
+dev.off()
+write.table(merged@meta.data,file = paste0("./",sam.name,"/",sam.name,"_cells_details_tsne_res0.2_",max(dim.use),"PC.txt"))
+DimPlot(merged, label = T,repel = T)+NoLegend()+labs("tSNE_1","tSNE_2")+theme(axis.text.y = element_blank(),axis.ticks.y = element_blank(),axis.text.x = element_blank(),axis.ticks.x = element_blank())+theme(panel.border = element_rect(fill=NA,color="black", size=1, linetype="solid"))  #加边框
+table(Idents(merged))
+Idents(merged)=merged$celltype.1
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_res0.2.rename.nk_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+merged$celltype=ifelse(merged$seurat_clusters%in%c(0,17),'T',
+                       ifelse(merged$seurat_clusters%in%c(1,5,9),'Kera',
+                              ifelse(merged$seurat_clusters%in%c(2,3,6,10),'Fib',
+                                     ifelse(merged$seurat_clusters%in%c(4,13),'Macro/DC',
+                                            ifelse(merged$seurat_clusters==7,'vEC',
+                                                   ifelse(merged$seurat_clusters==8,'B',
+                                                          ifelse(merged$seurat_clusters==11,'Mast',
+                                                                 ifelse(merged$seurat_clusters==12,'Melano',
+                                                                        ifelse(merged$seurat_clusters==14,'Schwann',
+                                                                               ifelse(merged$seurat_clusters==15,'LEC','Plasma'))))))))))
+table(merged$celltype.1)
+library(forcats)
+merged$celltype.1=factor(merged$celltype.1,levels = c('T','Kera','Fib','Macro/DC','vEC','LEC','B','Plasma','Mast','NK','Melano','Schwann'))
+Idents(merged)=merged$celltype.1
+table(Idents(merged))
+library(ggplot2)
+VlnPlot(merged,c('CD3D','CD3E','KRT1','KRT14','COL1A1','COL3A1','LYZ','AIF1','ACKR1','SELE','LYVE1','PROX1','MS4A1','CD79A','IGHG1','IGHA1','TPSAB1','TPSB2','NKG7','GNLY','PMEL','MLANA','MPZ','CDH19'),stack = T,pt.size = 0,cols = cols,flip = T)+NoLegend()
+library(ggsci)
+library(paletteer)
+#install.packages('paletteer')
+?paletteer_d
+pal.1 <- c(paletteer_d("ggsci::nrc_npg"),"#4DBBD5FF")
+pal.1 <- c("#E64B35FF","#4DBBD5FF","#00A087FF","#008B45B2","#F39B7FFF","#8491B4FF","#91D1C2FF","#EE0000B2","#7E6148FF","#3B4992B2","#631879B2","#E64B35B2")
+merged$orig.ident=ifelse(merged$orig.ident=='Ctrl1','HC1',
+                         ifelse(merged$orig.ident=='Ctrl2','HC2',
+                                ifelse(merged$orig.ident=='Ctrl3','HC3',
+                                       ifelse(merged$orig.ident=='SCLE.Huada','SCLE1',
+                                              ifelse(merged$orig.ident=='SCLE_1','SCLE2','SCLE3')))))
+merged$orig.ident=factor(merged$orig.ident,levels = c('HC1','HC2','HC3','SCLE1','SCLE2','SCLE3'))
+
+p1=DimPlot(merged, label = F,cols = pal.1,pt.size = 0.01,group.by = 'celltype.1')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p2=DimPlot(merged,label = F,cols=pal.1,pt.size = 0.01,group.by = 'orig.ident')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p3=DimPlot(merged,label = F,cols=pal.1,pt.size = 0.01,group.by = 'sample')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p1
+pdf(paste0("./",sam.name,"/CellCluster.res0.2.ctrl.scle.rename.sample.orig_",max(dim.use),"PC.pdf"),width = 20,height = 6)
+CombinePlots(plots = list(p2, p3,p1),ncol = 3)
+dev.off()
+p1=DimPlot(merged, label = F,cols = pal.1,pt.size = 0.01,group.by = 'celltype',cells = row.names(merged@meta.data)[merged$sample=='HC'])+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p2=DimPlot(merged,label = F,cols=pal.1,pt.size = 0.01,group.by = 'celltype',cells = row.names(merged@meta.data)[merged$sample=='SCLE'])+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p1|p2
+pdf(paste0("./",sam.name,"/CellCluster.res0.2.ctrl.scle.rename.sample_",max(dim.use),"PC.pdf"),width = 10,height = 4)
+CombinePlots(plots = list(p1, p2),ncol = 2)
+dev.off()
+table(Idents(merged))
+Idents(merged)=merged$celltype
+mycolor <- c('lightgrey','blue','seagreen2')
+FeaturePlot(merged,c('CD3D','KRTDAP','COL1A1','ACTA2','LYZ','ACKR1','CCL21','MS4A1','IGHG1','TPSB2','PMEL','MPZ'),cols = mycolor,pt.size = 0.01)+theme(panel.border = element_rect(fill=NA,color="black", size=1, linetype="solid"))#加边框                                             
+
+?FeaturePlot
+table(merged$celltype)
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes.rename_res0.2_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+c=table(merged$orig.ident,merged$celltype.1)
+c=as.data.frame(c)
+write.table(c,file = 'res0.2.rename.orig.celltype.1.txt',sep = '\t',row.names = T)
+p1=ggplot(c,mapping = aes(Var1,Freq,fill=Var2))+geom_bar(stat='identity',position='fill') +
+  labs(x = 'sample',y = 'frenquency') +theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+                                             axis.text.x = element_text(angle = 45, hjust = 1))
+p2=p1+scale_fill_manual(values=pal.1)
+
+p3=p2 + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p3
+ggsave(filename='orig.hc.scle.celltype.1.pdf',plot=p3,width=6,height=6)
+c=table(merged$orig.ident,merged$celltype.1)
+c=as.data.frame(c)
+write.table(c,file = 'res0.2.rename.sample.celltype.1.txt',sep = '\t',row.names = T)
+
+p1=ggplot(c,mapping = aes(Var1,Freq,fill=Var2))+geom_bar(stat='identity',position='fill') +
+  labs(x = 'sample',y = 'frenquency') 
+p2=p1+scale_fill_manual(values=pal.1)
+p2
+p3=p2 + theme_bw() +theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+                          axis.text.x = element_text(angle = 45, hjust = 1))+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p3
+ggsave(filename='celltype.1.orig.hc.scle.pdf',plot=p3,width=10,height=6)
+
+save(merged,file = 'ctrl.scle.res0.2.rename..remove.doublet.Rdata')
+marker.sig <- all.markers %>% filter(p_val_adj <= 0.05)
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_marker_genes_tsne.res0.2.rename.celltype.1_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+DoHeatmap(merged,features = top10$gene,slot = 'data',raster = F,group.colors = pal.1,label=F)+scale_fill_gradientn(colors = c("navy","white","firebrick3"))
+?DoHeatmap
+fib=subset(merged,celltype=='Fib')
+save(fib,file = 'fib.hc.scle.Rdata')
+t=subset(merged,celltype=='T')
+save(t,file = 't.hc.scle.Rdata')
+b=subset(merged,celltype=='B')
+plasma=subset(merged,celltype=='Plasma')
+b=merge(b,plasma)
+save(b,file = 'b.hc.scle.Rdata')
+mac=subset(merged,celltype=='Macro/DC')
+save(mac,file = 'mac.hc.scle.Rdata')
+mast=subset(merged,celltype=='Mast')
+save(mast,file = 'mast.hc.scle.Rdata')
+kera=subset(merged,celltype=='Kera')
+save(kera,file = 'kera.hc.scle.Rdata')
+vec=subset(merged,celltype=='vEC')
+lec=subset(merged,celltype=='LEC')
+ec=merge(vec,lec)
+save(ec,file = 'ec.hc.scle.Rdata')
+table(merged$cell_type)
+table(merged$celltype)
+merged$celltype.1=ifelse(colnames(merged)%in%nk.names,'NK',
+                         ifelse(merged$celltype=='Schwann','Schwann',
+                                ifelse(merged$celltype=='Kera','Kera',
+                                       ifelse(merged$celltype=='Fib','Fib',
+                                              ifelse(merged$celltype=='Macro/DC','Macro/DC',
+                                                     ifelse(merged$celltype=='vEC','vEC',
+                                                            ifelse(merged$celltype=='LEC','LEC',
+                                                                   ifelse(merged$celltype=='B','B',
+                                                                          ifelse(merged$celltype=='Plasma','Plasma',
+                                                                                 ifelse(merged$celltype=='Mast','Mast',
+                                                                                        ifelse(merged$celltype=='Melano','Melano','T')))))))))))
+
+table(merged$celltype.1)
+merged$celltype.1=factor()
+table(merged$celltype)
+table(merged$celltype.1)
+all=merged
+fib=merged
+kera=merged
+immune=merged
+myeloid=merged
+rm(all)
+rm(hc_counts,hc_meta)
+hc <- subset(all,sample=='HC')
+hc_counts <- as.matrix(hc@assays$RNA@data)
+hc_counts <- data.frame(Gene=rownames(hc), hc_counts)
+hc_meta <- data.frame(Cell=rownames(hc@meta.data), cell_type=hc@meta.data$celltype.1)
+write.table(hc_counts, "cellphonedb/hc/hc_counts.txt", row.names=F, sep='\t')
+write.table(hc_meta, "cellphonedb/hc/hc_meta.txt", row.names=F, sep='\t')
+scle <- subset(all,sample=='SCLE')
+scle_counts <- as.matrix(scle@assays$RNA@data)
+scle_counts <- data.frame(Gene=rownames(scle), scle_counts)
+scle_meta <- data.frame(Cell=rownames(scle), cell_type=scle@meta.data$celltype.1)
+write.table(scle_counts, "cellphonedb/scle/scle_counts.txt", row.names=F, sep='\t')
+write.table(scle_meta, "cellphonedb/scle/scle_meta.txt", row.names=T, sep='\t')
+memory.limit(102400)
+setwd('D:/SCLE')
+all=merged
+rm(merged)
+cells=colnames(scle_counts)
+cells.1=scle_meta$Cell
+a=cells%in%cells.1
+table(a)
+scle_counts[1:6,1:6]
+cells[1:6]
+cells.1[1:6]
+scle_counts=scle_counts[,-1]
+scle_meta[1:6,1:2]
+row.names(scle_meta)=scle_meta$Cell
+scle_meta=scle_meta[,-1]
+scle_meta
+scle_meta=data.frame(cell_type=scle_meta,row.names = colnames(scle_counts))
+FeaturePlot(merged,c('CD3D','KRT1','COL1A1','LYZ','ACKR1','LYVE1','CD79A','IGHG1','TPSAB1','NKG7','MLANA','MPZ'))
