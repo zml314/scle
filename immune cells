@@ -1,1 +1,658 @@
+library(Seurat)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(dplyr)
+library(ggsci)
+library(scater)
+library(SingleR)
+#memory.limit(102400)
+library(monocle)
+library(tibble)
+library(harmony)
+library(clusterProfiler)
+setwd('D:/SCLE/')
+setwd('./immune.cell/')
+sam.name <- "multi"
+library(RColorBrewer)
+cols <- c(brewer.pal(12,"Paired"),brewer.pal(8,"Dark2"),brewer.pal(9,"Set1"),brewer.pal(8,"Set2"),
+          brewer.pal(12,"Set3"),brewer.pal(8,"Pastel2"),brewer.pal(9,"Pastel1"),brewer.pal(8,"Accent"))
 
+if(!dir.exists(sam.name)){
+              dir.create(sam.name)
+}
+merged=subset(merged,seurat_clusters!=6)
+immune=merge(t,b)
+merged=immune
+rm(t,b,immune)
+save(immune,file = 'scle.immune.cells.Rdata')
+merged <- NormalizeData(merged, normalization.method = "LogNormalize",scale.factor = 10000)
+merged <- FindVariableFeatures(merged, selection.method = "vst", nfeatures = 2000)
+merged@assays$RNA@var.features<-c(var.gene,c('CD4','CD8'))%>%unique()
+all.genes <- rownames(merged)
+merged <- ScaleData(merged, features = all.genes)#需要足够大的内存
+merged <- ScaleData(merged, vars.to.regress = "percent.mt")
+merged <- RunPCA(merged, features = VariableFeatures(object = merged))
+pdf(paste0("./",sam.name,"/PCA-ElbowPlot.pdf"),width = 6,height = 5)
+ElbowPlot(merged,ndims = 40)
+dev.off()
+dim.use=1:20
+library(harmony)
+merged=RunHarmony(merged,group.by.vars ='orig.ident')
+merged<- FindNeighbors(merged, dims = dim.use,reduction = 'harmony',nn.method = "rann")
+merged <- FindClusters(merged, resolution =0.2)
+merged <- RunTSNE(merged, dims = dim.use,reduction = 'harmony')
+pdf(paste0("./",sam.name,"/tsne_Plot.harmony_res0.1_",max(dim.use),"PC.pdf"),width = 5,height = 4)
+DimPlot(object = merged, pt.size=0.1,label = T)
+dev.off()
+#Idents(merged)=merged$RNA_snn_res.0.3
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_res0.2_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+all.markers.noRibo=all.markers[!grepl('^RP[SL]',all.markers$gene,ignore.case = F),]
+all.markers.noRibo.noMito=all.markers.noRibo[!grepl('^MT-',all.markers.noRibo$gene,ignore.case = F),]
+write.table(all.markers.noRibo.noMito,file = 'all.markers.res0.2.immunecells.subcluster.noRI.moMT.txt',sep = '\t')
+
+marker.sig <- all.markers.noRibo.noMito[all.markers.noRibo.noMito$p_val_adj<=0.05,]
+
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_res0.2.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+top10$gene
+VlnPlot(merged,c('CTLA4','FOXP3','IL2RA','TIGIT'),cols = cols,stack = T,flip = T)####Treg
+VlnPlot(merged,c('TBX21','IFNG'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('IL7R','SELL','CD28','CCR7','TCF1'),cols = cols,stack = T,flip = T)
+VlnPlot(merged,c('IL7R','SELL','CD28','CCR7','TCF1'),cols = cols,stack = T,flip = T)
+merged$subtype=ifelse(merged$seurat_clusters%in%c(3),'Treg',
+                      ifelse(merged$seurat_clusters%in%c(0,2),'Naive/Tcm',
+                             ifelse(merged$seurat_clusters%in%c(4,8),'NKT',
+                                    ifelse(merged$seurat_clusters==1,'B helper',
+                                           ifelse(merged$seurat_clusters==6,'NK',
+                                                  ifelse(merged$seurat_clusters==9,'Cycling cells',
+                                                         ifelse(merged$seurat_clusters==11,'Plasma',
+                                                                ifelse(merged$seurat_clusters%in%c(5,10),'Exhausted T','Th1-like'))))))))
+table(merged$subtype)
+merged$subtype=factor(merged$subtype,levels = c('Cycling cells','Naive/Tcm','NKT','Exhausted T','Treg','Th1-like','B helper','Plasma','NK'))
+library(paletteer)
+pal.1 <- c(paletteer_d("ggsci::nrc_npg"),"#4DBBD5FF")
+p1=DimPlot(merged, label = F,cols = pal.1,pt.size = 0.1,group.by = 'subtype')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p2=DimPlot(merged,label = F,cols=pal.1,pt.size = 0.1,group.by = 'orig.ident')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p3=DimPlot(merged,label = F,cols=pal.1,pt.size = 0.1,group.by = 'sample')+labs("tSNE_1","tSNE_2")+theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+theme(legend.position = "bottom")  #加边框
+p1
+pdf(paste0("./",sam.name,"/CellCluster.res0.2.ctrl.scle.rename.sample.orig_",max(dim.use),"PC.pdf"),width = 18,height = 6)
+CombinePlots(plots = list(p2, p3,p1),ncol = 3)
+dev.off()
+table(merged$seurat_clusters)
+b=merged@assays$RNA@counts
+b=SummarizedExperiment(assays=list(counts=b,logcounts=b))
+
+b <- logNormCounts(b)
+library(SingleR)
+merged@meta.data$cell_type=pred.hesc$labels
+merged@meta.data$subtype=pred.hesc.1$labels
+table(merged$orig.ident)
+load('E:/R_analysis/BD/mana20200817.Rdata')
+mana
+table(mana$label.fine)
+View(mana@metadata)
+pred.mana <- SingleR(test = b, ref = mana, labels = mana$label.main)
+pred.mana.1 <- SingleR(test = b, ref = mana, clusters = merged$seurat_clusters,labels = mana$label.fine)
+table(pred.mana.1$labels)
+merged@meta.data$cell_type=pred.mana$labels
+merged@meta.data$subtype.mana=pred.mana.1$labels
+table(merged$orig.ident)
+a=as.data.frame(pred.mana.1)
+a=table(merged$seurat_clusters,merged$cell_type,merged$subtype)
+a=data.frame(a)
+write.table(a,file = 't.singler.celltype.txt',sep='\t')
+genelist <- read.table("./IFN.txt",header = T)
+genelist=genelist$genes
+genelist <- list(genelist)
+merged <- Seurat::AddModuleScore(object = merged,features = genelist,ctrl = 200,name = "IRGs")
+colnames(merged@meta.data)[25] <- "IRGs Score"
+VlnPlot(merged,features = "IRGs Score",split.by = "sample",pt.size = 0)
+data <- FetchData(merged,vars = c("subtype","sample","IRGs Score"))
+colnames(data)[3]='IRGs'
+p <- ggplot(data = data,aes(subtype,IRGs,fill = sample))
+p1=p + geom_boxplot() + RotatedAxis() + labs(title = "IRGs Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+class(data$subtype)=as.character(data$subtype)
+data$subtype=ifelse(data$subtype=='B helper','B',ifelse(data$subtype=='Cycling cells','Cycling cells',
+                                                        ifelse(data$subtype=='Naive/Tcm','Naive/Tcm',
+                                                               ifelse(data$subtype=='NKT','NKT',
+                                                                      ifelse(data$subtype=='Exhausted T','Exhausted T',
+                                                                             ifelse(data$subtype=='Treg','Treg',
+                                                                                    ifelse(data$subtype=='Th1-like','Th1-like',
+                                                                                           ifelse(data$subtype=='Plasma','Plasma','NK'))))))))
+p2
+data$subtype=factor(data$subtype,levels=c('Cycling cells','Naive/Tcm','NKT','Exhausted T','Treg','Th1-like','B','Plasma','NK'))
+ggsave(filename = 'IRGs score.fib.subtype.sample.xiangxiantu.pdf',plot = p2,width = 8,height = 5)
+colnames(merged@meta.data)
+colnames(pericyte@meta.data)[22] <- "IRGs Score"
+VlnPlot(pericyte,features = "IRGs Score",split.by = "sample",pt.size = 0)
+boxp <- ggplot(data, aes(x=sample, y=IRGs)) + 
+              geom_boxplot(position=position_dodge()) + 
+              geom_point(aes(color=sample), position=position_jitterdodge()) + 
+              facet_wrap(~subtype) +
+              stat_compare_means()
+boxp2 <- ggplot_build(boxp)
+p1=boxp + geom_boxplot() + RotatedAxis() + labs(title = "IRGs Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p1
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+p2
+ccr6=merged@assays$RNA@scale.data[row.names(merged@assays$RNA@scale.data)=='CCR6',]
+ccr6=t(ccr6)
+colnames(ccr6)='CCR6'
+data <- FetchData(merged,vars = c("subtype","sample"))
+data=cbind(data,ccr6)
+boxp <- ggplot(data, aes(x=sample, y=CCR6)) + 
+              geom_boxplot(position=position_dodge()) + 
+              geom_point(aes(color=sample), position=position_jitterdodge()) + 
+              facet_wrap(~subtype) +
+              stat_compare_means()
+boxp2 <- ggplot_build(boxp)
+p1=boxp + geom_boxplot() + RotatedAxis() + labs(title = "CCR6",y = "Scaled expression of CCR6") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p1
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+p2
+colnames(merged@meta.data)
+data <- FetchData(merged,vars = c("subtype","sample","CCR61"))
+boxp <- ggplot(data, aes(x=sample, y=CCR61)) + 
+              geom_boxplot(position=position_dodge()) + 
+              geom_point(aes(color=sample), position=position_jitterdodge()) + 
+              facet_wrap(~subtype) +
+              stat_compare_means()
+boxp2 <- ggplot_build(boxp)
+p1=boxp + geom_boxplot() + RotatedAxis() + labs(title = "CCR6 Scores",y = "Scores") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p1
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+p2
+expression=merged@assays$RNA@scale.data
+colnames(data)[3]='chemokines'
+p <- ggplot(data = data,aes(subtype,IRGs,fill = sample))
+p1=p + geom_boxplot() + RotatedAxis() + labs(title = "IRGs Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p1
+p <- ggplot(data = data,aes(subtype,IRGs,fill = sample))
+p1=p + geom_boxplot() + RotatedAxis() + labs(title = "IRGs Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p1
+p <- ggplot(data = data,aes(subtype,IRGs,fill = sample))
+p1=p + geom_boxplot() + RotatedAxis() + labs(title = "IRGs Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+library(ggpubr)
+table(data$subtype)
+p3=p2+stat_compare_means(label = "p.format")###添加统计学分析P值
+p3
+table(data$subtype)
+data=data[data$subtype%in%c('NKT','Th1-like','NK'),]
+boxp <- ggplot(data, aes(x=sample, y=CCR61)) + 
+              geom_boxplot(position=position_dodge()) + 
+              geom_point(aes(color=sample), position=position_jitterdodge()) + 
+              facet_wrap(~subtype) +
+              stat_compare_means()
+boxp2 <- ggplot_build(boxp)
+p1=boxp + geom_boxplot() + RotatedAxis() + labs(title = "CCR6 Score",y = "Score") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme_bw()+theme(panel.grid=element_blank()) 
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+p2
+VlnPlot(merged,features = "CCR61",assay = 'RNA',split.by = "sample",pt.size = 0,idents = c('NKT','Th1-like','NK'),split.plot = T,y.max = 0.5)
+?VlnPlot
+b=merged$subtype%in%c('Naive/Tcm','NKT','Exhausted T','Treg','Th1-like','B helper','NK')
+b=colnames(merged)[b]
+
+dim(merged)
+Idents(merged)=merged$subtype.sample
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_res0.2.rename.sample",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig <- all.markers[all.markers$p_val_adj<=0.05,]
+
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_res0.2.rename.sample.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+a=top10$gene
+a[1:10]=c('MZB1','DERL3','PCLAF','MKI67','TYMS','UBE2C','TK1','RRM2','ASPM','AURKB')
+a[71:80]=c('IGHG3','IGHA1','MS4A1','TCF4','CD40','IGHG1','IGHG4','SWAP70','BASP1')
+a=unique(a)
+table(merged$subtype)
+VlnPlot(merged,features = c('MKI67','TOP2A','UBE2C','CD3D','CD3E','CD4','CD8A','CD8B','IL7R','CCR7','CD28','GZMB','GNLY','KLRD1','CXCL13','CTLA4','TIGIT','IL2RA','FOXP3','IKZF2','IFNG','STAT1','CD79A','MS4A1','HLA-DRA','CD83','HLA-DQA','HLA-DRB1','IGHG3','IGHA1','IGHG1','XCL2','XCL1','NKG7'),pt.size = 0,cols = cols,stack = T,flip = T)+NoLegend()
+a=unique(a)
+a[46]='FOXP3'
+p1=DotPlot(merged,features = a)
+p2=p1+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+p2
+genes=read.table('./chemokines and receptors.txt',sep = '\t')
+genes=c('CCL20','CXCL1')
+genes=c(genes$V2,genes$V3)
+genes=genes[-c(1,77,100)]
+genes=as.list(genes)
+VariableFeatures(merged)
+a=VariableFeatures(merged)
+d=genes%in%a
+table(d)
+d=genes[d]
+d=list(c(d))
+write.table(d,file = 'chemokines.t.variablegenes.txt',sep = '\t')
+genes=c('CCR6')
+genes=as.list(genes)
+
+merged <- Seurat::AddModuleScore(object = merged,features = genes,ctrl = 200,name = "CCR6")
+Idents(merged)=merged$subtype
+VlnPlot(merged,features = c('CCR6'),split.by = 'sample')+NoLegend()
+a=table(merged$sample,merged$subtype)
+a=as.data.frame(a)
+write.table(a,file = 'immune.res0.2.rename.sample.txt',row.names = T,sep = '\t')
+
+table(merged$sample)
+a$ratio=ifelse(a$Var1=='HC',a$Freq/8023,a$Freq/35778)
+a$ratio.1=ifelse(a$Var1=='HC',a$Freq/318,a$Freq/13704)
+write.table(a,file = 'immune.sample.subtype.ratio.txt',sep='\t')
+b=table(merged$orig.ident,merged$subtype)
+b=as.data.frame(b)
+write.table(b,file = 'immune.res0.2.rename.orig.txt',row.names = T,sep = '\t')
+
+p1=ggplot(a,mapping = aes(Var2,ratio,fill=Var1))+geom_bar(stat='identity',position=position_dodge(0.75)) +
+              labs(x = '',y = 'Proportion of cells') 
+
+p2=p1+scale_fill_manual(values=cols)
+p3=p2 + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+                                                                                                         axis.text.x = element_text(angle = 45, hjust = 1))
+
+p3
+ggsave(filename='immune.res0.2.rename.subtype.sample.pdf',plot=p3,width=6,height=5)
+p1=ggplot(a,mapping = aes(Var1,Freq,fill=Var2))+geom_bar(stat='identity',position='fill') +
+              labs(x = 'sample',y = 'frenquency') +theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+                                                         axis.text.x = element_text(angle = 45, hjust = 1))
+p2=p1+scale_fill_manual(values=cols)
+
+p3=p2 + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p3
+ggsave(filename='immune.cell.subtype.sample.res0.3.pdf',plot=p3,width=5,height=4)
+merged$subtype.sample=c(paste(merged$subtype,merged$sample,sep = '.'))
+Idents(merged)=merged$subtype.sample
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_immune.rename.marker_genes_tsne_res0.2_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig <- all.markers[all.markers$p_val_adj<=0.05,]
+
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_res0.2.immune.res0.2.rename.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+Idents(merged)=merged$subtype
+DoHeatmap(merged,features = a,assay = 'RNA',label = F,raster = F)+scale_fill_gradientn(colors = c("navy","white","firebrick3"))
+a=top10$gene
+a[1:10]=c('DERL3','PCLAF','MKI67','TYMS','UBE2C','TK1','MZB1','RPM2','ASPM','AURKB')
+a[51:60]=c('FOXP3','GK','IKZF2','TIGIT','CTLA4','CARD16','TBC1D4','BATF','GLCCI1','MAGEH1')
+a
+a[71:80]=c('MS4A1','SWAP70','BASP1','TCF4','CD40','IGHG3','CD79A','IGHA1','IGHG1','IGHG4')
+
+library(clusterProfiler)
+library(topGO)
+library(Rgraphviz)
+library(pathview)
+library(org.Hs.eg.db)
+library(DOSE)
+library(clusterProfiler)
+library(enrichplot)
+#BiocManager::install('ReactomePA')
+library(ReactomePA)
+library(data.table)
+write.table(all.markers)
+all.markers=read.table('./multi/multi_immune.rename.sample.marker_genes_tsne_res0.2_20PC.txt',sep = '\t',header = T,row.names = 1)
+a=unique(all.markers$cluster)
+a=as.character(a)
+a
+for (i in a) {
+              gene=all.markers$cluster==i
+              gene=all.markers[gene,]
+              genename <- as.character(gene$gene)
+              genename=mapIds(x = org.Hs.eg.db,keys =genename,
+                              keytype = "SYMBOL",column = "ENTREZID")
+              enrich.go.BP=enrichGO(gene = genename,
+                                    OrgDb = org.Hs.eg.db,
+                                    keyType = 'ENTREZID',
+                                    ont = 'BP',
+                                    pvalueCutoff = 0.01,
+                                    qvalueCutoff = 0.05,readable = T)
+              enrich.KEGG=enrichKEGG(gene = genename,organism = "hsa",
+                                     keyType = "kegg",pvalueCutoff = 0.01,
+                                     use_internal_data = F,qvalueCutoff = 0.05)
+              
+              write.table(enrich.go.BP,file =paste0(i,'_.go.txt') ,sep='\t')
+              write.table(enrich.KEGG,file =paste0(i,'_.kegg.txt') ,sep='\t')
+}
+GO=read.table('./expanded.immune.cell.subtype.all.go.txt',sep = '\t',header = T,stringsAsFactors = F,quote = '')
+GO=GO[,c(3,8,10,11)]
+GO1=read.table('./expanded.immune.cell.subtype.selected.go.txt',sep = '\t',header = T,stringsAsFactors = F)
+GO7=GO[GO$Description%in%GO1$Description,]
+#GO7$subcluster=paste0('SC',GO7$subcluster)
+library(forcats)
+library(ggplot2)
+GO7$Description=fct_infreq(GO7$Description)
+#GO7$sample=factor(GO7$sample,levels = c('HC','DLE','SLE'))
+p <- ggplot(GO7, aes(subtype,Description, size = Count, color=qvalue)) + geom_point() +xlab("sample")
+p2=p + scale_color_gradient(low='red',high='blue') +theme_bw()+theme(panel.grid.major=element_line(colour=NA))+theme(panel.grid.major=element_line(colour=NA))+theme(text = element_text(size = 20))
+p3=p2+theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+p3
+ggsave(filename = 'burbble.pathway.expanded.subtype.immunecells.pdf',plot = p3,width =12,height = 14)
+table(merged$celltype)
+colnames(merged@meta.data)
+merged@meta.data=merged@meta.data[,-c(13)]
+table(merged$subtype)
+merged$celltype.1=ifelse(merged$subtype=='NK','NK',ifelse(merged$celltype%in%c('B','Plasma'),'B','T'))
+table(merged$celltype.1)
+table(merged$celltype)
+t=subset(merged,celltype.1=='T')
+b=subset(merged,celltype.1=='B')
+nk=subset(merged,celltype.1=='NK')
+save(t,file = 't.Rdata')
+save(b,file='b.Rdata')
+save(nk,file = 'nk.Rdata')
+save(merged,file = 'immune.cell.res0.2.rename.Rdata')
+nk <- NormalizeData(nk, normalization.method = "LogNormalize",scale.factor = 10000)
+nk <- FindVariableFeatures(nk, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(nk)
+nk <- ScaleData(nk, features = all.genes)
+nk <- ScaleData(nk, vars.to.regress = "percent.mt")
+Idents(nk)=nk$sample
+all.markers <- FindAllMarkers(nk, only.pos = TRUE, 
+                              min.pct = 0.1, logfc.threshold = 0.1)
+table(all.markers$cluster)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_nk.sample",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig <- all.markers[all.markers$p_val_adj<=0.05,]
+
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_nk.sample.marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+
+library(GSVA)
+library(GSEABase)
+library(clusterProfiler)
+library(GSEA)
+library(GSEABase)
+library(GSVA)
+library(data.table)
+
+SCLE=all.markers[all.markers$cluster=='SCLE',]
+HC=all.markers[all.markers$cluster=='HC',]
+genes <- data.frame(logFC=SCLE$avg_log2FC,
+                    SYMBOL = SCLE$gene)
+geneList<-genes$logFC
+names(geneList)=genes$SYMBOL 
+geneList=sort(geneList,decreasing = T)
+
+genes <- data.frame(logFC=HC$avg_log2FC, 
+                    SYMBOL = HC$gene)
+geneList<-genes$logFC
+names(geneList)=genes$SYMBOL
+geneList=sort(geneList,decreasing = T)
+geneList
+kegggmt2 <- read.gmt("c5.go.bp.v7.5.1.symbols.gmt")
+?GSEA
+KEGG<-clusterProfiler::GSEA(geneList, TERM2GENE = kegggmt2) #GSEA分析
+kegg.1=as.data.frame(KEGG)
+fwrite(kegg.1,file = 'SCLE.b.GSEA.C5bp.H.CSV')
+library(enrichplot)
+?gseaplot2
+gseaplot2(KEGG,'GOBP_DEFENSE_RESPONSE',color="red",pvalue_table = T)
+gseaplot2(KEGG,'GOBP_PEPTIDE_BIOSYNTHETIC_PROCESS',color="red",pvalue_table = T)
+DoHeatmap(nk,features = all.markers$gene,assay = 'RNA',label = F,raster = F)+scale_fill_gradientn(colors = c("navy","white","firebrick3"))
+library(Seurat)
+library(tidyverse)
+library(patchwork)
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+BiocManager::install(c("AUCell", "RcisTarget"),ask = F,update = F) 
+BiocManager::install(c("GENIE3"),ask = F,update = F) # Optional. Can be replaced by GRNBoost
+if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools")
+devtools::install_github("aertslab/SCopeLoomR", build_vignettes = TRUE)
+
+if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools")
+devtools::install_github("aertslab/SCENIC") 
+packageVersion("SCENIC")
+library(SCENIC)
+dir.create("SCENIC")
+dir.create("SCENIC/int")
+setwd("./SCENIC")
+dbFiles <- c("https://resources.aertslab.org/cistarget/databases/homo_sapiens/hg38/refseq_r80/mc9nr/gene_based/hg38__refseq-r80__10kb_up_and_down_tss.mc9nr.feather",
+             "https://resources.aertslab.org/cistarget/databases/homo_sapiens/hg38/refseq_r80/mc9nr/gene_based/hg38__refseq-r80__500bp_up_and_100bp_down_tss.mc9nr.feather")
+# dir.create("cisTarget_databases"); setwd("cisTarget_databases") # if needed
+#dbFiles <- c("https://resources.aertslab.org/cistarget/databases/mus_musculus/mm9/refseq_r45/mc9nr/gene_based/mm9-500bp-upstream-7species.mc9nr.feather",
+             "https://resources.aertslab.org/cistarget/databases/mus_musculus/mm9/refseq_r45/mc9nr/gene_based/mm9-tss-centered-10kb-7species.mc9nr.feather")
+dbFiles
+for(featherURL in dbFiles)
+{download.file(featherURL, destfile=basename(featherURL)) # saved in current dir
+              # (1041.7 MB)
+              # 
+}
+rm(dbFiles)
+library(sctransform)
+cells=colnames(merged)
+cell_id <- sample(x = seq(1, length(cells)), 5000)
+cell=cells[cell_id]
+cell
+#merged.1=subset(merged,colnames(merged)%in%cell)
+a=colnames(merged)%in%cell
+merged$downsample=a
+table(merged$downsample)
+merged.1=subset(merged,downsample==T)
+rm(merged.1)
+merged=merged.1
+merged <- SCTransform(merged, vars.to.regress = "percent.mt", verbose = FALSE)
+
+exprMat <- GetAssayData(merged, assay = 'SCT', slot = 'data') %>% as.matrix()
+head(merged@meta.data)
+cellInfo <- data.frame(merged@meta.data) %>% dplyr::select(subtype,sample,orig.ident,celltype.1)
+saveRDS(cellInfo, file="int/cellInfo.Rds")
+mydbDIR <- "D:/SCENIC/hg38_scenic/"
+dir(mydbDIR)
+mydbs <- c("hg38__refseq-r80__500bp_up_and_100bp_down_tss.mc9nr.feather",
+           "hg38__refseq-r80__10kb_up_and_down_tss.mc9nr.feather")
+names(mydbs) <- c("500bp", "10kb")
+scenicOptions <- initializeScenic(org = "hgnc", 
+                                  nCores = 1,
+                                  dbDir = mydbDIR, 
+                                  dbs = mydbs,
+                                  datasetTitle = "HNC")
+saveRDS(scenicOptions, "int/scenicOptions.rds")
+if(F){
+              saveRDS(exprMat, "exprMat.rds")
+              saveRDS(cellInfo, "cellInfo.rds")
+}
+genesKept <- geneFiltering(exprMat, scenicOptions, 
+                           minCountsPerGene = 0.015 * ncol(exprMat), 
+                           minSamples = ncol(exprMat) * 0.01)
+exprMat_filtered <- exprMat[genesKept, ]
+exprMat_filtered[1:4,1:4]
+runCorrelation(exprMat_filtered, scenicOptions)
+exprMat_filtered_log <- log2(exprMat_filtered+1)
+runGenie3(exprMat_filtered, scenicOptions)
+exprMat_log <- log2(exprMat+1)
+scenicOptions@settings$dbs <- scenicOptions@settings$dbs["10kb"] # Toy run settings
+
+scenicOptions <- runSCENIC_1_coexNetwork2modules(scenicOptions)
+scenicOptions <- runSCENIC_2_createRegulons(scenicOptions,coexMethod=c("top5perTarget")) # Toy run settings
+
+#scenicOptions@settings$nCores <- 2
+#runSCENIC_2_createRegulons(scenicOptions)
+library(doParallel)
+scenicOptions <- runSCENIC_3_scoreCells(scenicOptions, exprMat_log ) 
+scenicOptions <- runSCENIC_4_aucell_binarize(scenicOptions)
+tsneAUC(scenicOptions, aucType="AUC") # choose settings
+scenicOptions@settings$nCores <- 6
+runSCENIC_3_scoreCells(scenicOptions, exprMat=exprMat)
+runSCENIC_4_aucell_binarize(scenicOptions, exprMat=exprMat)
+setwd("../")
+getwd()
+setwd('./SCENIC/')
+load("scRNA_classify.Rdata")
+scRNA$Cluster <- scRNA$seurat_clusters
+Regulon <- readRDS("SCENIC/int/3.4_regulonAUC.Rds")
+Regulon <- Regulon@assays@data@listData$AUC
+Regulon_all <- Regulon[,colnames(scRNA)]
+regulon <- data.frame(Regulons=rownames(Regulon_all), Regulon_all)
+write.csv(regulon, "SCENIC/RegulonAUC.csv", row.names = F)
+Regulon_high <- Regulon[!grepl("extended", rownames(Regulon)),]
+Regulon_low <- Regulon[grepl("extended", rownames(Regulon)),]
+scRNA[["Regulon"]] <- CreateAssayObject(counts = Regulon_high)
+DefaultAssay(scRNA) <- "Regulon"
+dim(scRNA)
+features <- rownames(scRNA@assays$Regulon@counts)
+scRNA <-  ScaleData(scRNA,features=features) %>% RunPCA(features=features)
+ElbowPlot(scRNA)
+pc.num=1:10
+scRNA <- scRNA %>% RunTSNE(dims=pc.num) %>% RunUMAP(dims=pc.num) %>%
+              FindNeighbors(dims = pc.num) %>% FindClusters(resolution=0.8)
+p1 <- DimPlot(scRNA, reduction = "umap", group.by = "celltype", 
+              label = T, label.size = 2) + NoLegend()
+p2 <- DimPlot(scRNA, reduction = "umap", label = T) + NoLegend()
+pc <- p1 + p2 + plot_layout(guides = "collect")        
+ggsave("SCENIC/Reg_Celltype.png", width = 8, height = 4)
+p1 <- DimPlot(scRNA, reduction = "umap", group.by = "Cluster", 
+              label = T, label.size = 3) + NoLegend()
+p2 <- DimPlot(scRNA, reduction = "umap", label = T) + NoLegend()
+pc <- p1 + p2 + plot_layout(guides = "collect")        
+ggsave("SCENIC/Reg_Cluster.png", width = 8, height = 4)
+diff.wilcox = FindAllMarkers(scRNA, slot='counts', logfc.threshold = 0.1)
+reg.markers = diff.wilcox %>% select(gene, everything()) %>% filter(p_val<0.05)
+write.csv(reg.markers, "SCENIC/Reg_Markers.csv", row.names = F)
+p = DoHeatmap(scRNA, features=pull(reg.markers, gene))
+ggsave("SCENIC/Reg_Markers.png", p, width = 12, height = 6)
+binRegulon <- readRDS("SCENIC/int/4.1_binaryRegulonActivity.Rds")
+binRegulon_all <- binRegulon[,colnames(scRNA)]
+binreg <- data.frame(binRegulon=rownames(binRegulon_all), binRegulon_all)
+write.csv(binreg, "SCENIC/binRegulon.csv")
+binRegulon_high <- binRegulon[!grepl("extended", rownames(binRegulon)),]
+binRegulon_low <- binRegulon[grepl("extended", rownames(binRegulon)),]
+scRNA[["binRegulon"]] <- CreateAssayObject(counts = binRegulon_high)
+DefaultAssay(scRNA) <- "binRegulon"
+p = DoHeatmap(scRNA, features=pull(reg.markers, gene), slot = "counts")
+ggsave("SCENIC/binRegulon.png", p, width = 12, height = 6)
+
+DefaultAssay(scRNA) <- "Regulon"
+cells1 <- subset(scRNA@meta.data, Cluster %in% c(3,9,15,17) &
+                               orig.ident %in% c("HNC01TIL", "HNC10TIL", "HNC20TIL")) %>% rownames()
+cells2 <- subset(scRNA@meta.data, Cluster %in% c(3,9,15,17) &
+                               orig.ident %in% c("HNC01PBMC", "HNC10PBMC", "HNC20PBMC")) %>% rownames()
+deg.reg <- FindMarkers(scRNA, ident.1 = cells1, ident.2 = cells2, assay = "Regulon", 
+                       slot = "counts", logfc.threshold = 0, min.pct = 0)
+deg.reg <- data.frame(Regulon = rownames(deg.reg), deg.reg)
+deg.reg <- filter(deg.reg, p_val<0.05) %>% arrange(desc(avg_logFC))
+write.csv(deg.reg, "SCENIC/DEG-Reg_pbmc_mono.csv", row.names = F)
+p = FeaturePlot(scRNA, features = "JUN (28g)", reduction = "umap")
+ggsave("SCENIC/Reg_JUN-28g.png", p, width = 6, height = 4)
+save(scRNA, file = "scRNA_reg.Rdata")
+}
+load('../immune.cell.res0.2.rename.Rdata')
+table(merged$celltype.1)
+b=subset(merged,celltype.1=='B')
+cycling=subset(merged,subtype=='Cycling cells')
+b=merge(b,cycling)
+table(b$subtype)
+b=subset(b,subtype!='Naive/Tcm')
+b=subset(b,subtype!='NKT')
+b <- NormalizeData(b, normalization.method = "LogNormalize",scale.factor = 10000)
+b <- FindVariableFeatures(b, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(b)
+b <- ScaleData(b, features = all.genes)
+b <- ScaleData(b, vars.to.regress = "percent.mt")
+merged.1=b
+table(merged.1$subtype)
+rm(list = ls())
+cells=colnames(merged)
+cell_id <- sample(x = seq(1, length(cells)), 5000)
+cell=cells[cell_id]
+cell
+#merged.1=subset(merged,colnames(merged)%in%cell)
+a=colnames(merged)%in%cell
+merged$downsample=a
+table(merged$downsample)
+merged.1=subset(merged,downsample==T)
+merged.1=subset(merged.1,sample=='SCLE')
+save(merged.1,file = 'immunecells.downsample.scle.nishixu.Rdata')
+table(merged.1$subtype)
+merged.1=subset(merged.1,subtype!='B helper')
+merged.1=subset(merged.1,subtype!='Plasma')
+merged.1=subset(merged.1,subtype!='NK')
+merged.1=subset(merged.1,subtype!='Cycling cells')
+merged.1=b
+table(b$subtype)
+Idents(merged.1)=merged.1$subtype
+markers <- FindAllMarkers(merged.1, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+data <- as(as.matrix(merged.1@assays$RNA@counts), 'sparseMatrix')
+pd <- new('AnnotatedDataFrame', data = merged.1@meta.data)
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+cds <- newCellDataSet(data,
+                      phenoData = pd,
+                      featureData = fd,
+                      lowerDetectionLimit = 0.5,
+                      expressionFamily = negbinomial.size());
+
+
+cds <- estimateSizeFactors(cds)
+
+cds <- estimateDispersions(cds)
+ordering_genes <- row.names (subset(markers, p_val < 0.01))
+cds.1 <- setOrderingFilter(cds, markers$gene)
+
+pdf('./multi/plot_ordering_genes_immune.pdf')
+plot_ordering_genes(cds.1)
+dev.off()
+HSMM <- reduceDimension(cds.1, max_components = 2,
+                        method = 'DDRTree')
+
+#Trajectory step 3: order cells along the trajectory  
+HSMM <- orderCells(HSMM)
+pdf('./multi/plot_cell_trajectory_b.sample.pdf')
+plot_cell_trajectory(HSMM, color_by = "sample",show_branch_points = F)
+dev.off()
+pdf('./multi/plot_cell_trajectory_b.subtype.pdf')
+plot_cell_trajectory(HSMM, color_by = "subtype",show_branch_points = F,backbone_color = cols)
+dev.off()
+library(ggsci)
+p1=plot_cell_trajectory(HSMM, color_by = "sample",show_branch_points = F)  + scale_color_npg() 
+p2=plot_cell_trajectory(HSMM, color_by = "State",show_branch_points = F)  + scale_color_nejm()
+colour=c("#DC143C","#0000FF","#20B2AA","#FFA500","#9370DB","#98FB98","#F08080")
+p3=plot_cell_trajectory(HSMM, color_by = "subtype",show_branch_points = F)  + scale_color_jama()
+p1|p2|p3
+p1|p3
+p2
+p1=plot_cell_trajectory(HSMM, color_by = "sample",show_branch_points = F)  + scale_color_npg() 
+p2=plot_cell_trajectory(HSMM, color_by = "Pseudotime",show_branch_points = F)  
+colour=c("#DC143C","#0000FF","#20B2AA","#FFA500","#9370DB","#98FB98","#F08080")
+p3=plot_cell_trajectory(HSMM, color_by = "subtype",show_branch_points = F)  + scale_color_manual(values = colour)
+p1|p2|p3
+p2|p3
+plotc <- p1|p2|p3
+plotc
+ggsave("trajetory.b.sample.psedotime.subtype.pdf.pdf", plot = plotc, width = 15, height = 5)
+ordering_genes
+keygenes <- 'IFI44L'
+HSMM_subset <- HSMM[keygenes,]
+
+p1 <- plot_genes_in_pseudotime(HSMM_subset, color_by = "sample")+scale_color_npg()
+p2 <- plot_genes_in_pseudotime(HSMM_subset, color_by = "State")
+p3 <- plot_genes_in_pseudotime(HSMM_subset, color_by = "subtype") + scale_color_manual(values = colour)
+p4 <- plot_genes_in_pseudotime(HSMM_subset, color_by = "Pseudotime")
+p2
+plotc <- p1|p3|p4
+plotc
+ggsave("trajetory.b.IFI44L.expression.pdf.pdf", plot = plotc, width = 15, height = 5)
+HSMM=detectGenes(HSMM,min_expr = 0.1)
+expressed_genes=row.names(subset(fData(HSMM),num_cells_expressed>=10)) 
+states_de <- differentialGeneTest(HSMM[expressed_genes,],
+                                  fullModelFormulaStr = "~State")
+table(states_de$use_for_ordering)
+write.table(states_de, file = "b.states_de.rds", quote = FALSE, sep = '\t', row.names = FALSE, col.names = TRUE)
+markers$gene
+top20=markers%>%group_by(cluster)%>%top_n(n=20,wt=avg_log2FC)
+top20$gene
+genes=top20$gene
+genes=genes[-c(21:30)]
+genes=genes[-c(37,38,39,21,40)]
+pdf('./multi/plot_cell_trajectory_pseudotime_heatmap_fib.pdf',width = 10,height = 15)
+plot_pseudotime_heatmap(HSMM[row.names(HSMM)%in%genes],show_rownames = T,num_clusters = 3)
+dev.off()
